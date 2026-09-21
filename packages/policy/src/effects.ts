@@ -21,9 +21,10 @@ export function effectsFromShell(analysis: ShellAnalysis, cwd: string, workspace
   if (!analysis.ok) return [];
   const out: EffectRecord[] = [];
   const add = (target: string, kind: EffectKind) => {
-    const t = kind === "exec" || kind === "git" || kind === "network"
-      ? target : normalizePath(target, cwd);
-    out.push({ target: t, kind, scope: scope(t, normalizePath(workspaceRoot, "/")) });
+    const isPath = kind !== "exec" && kind !== "git" && kind !== "network";
+    const t = isPath ? normalizePath(target, cwd) : target;
+    const s = isPath ? scope(t, normalizePath(workspaceRoot, "/")) : "in_workspace";
+    out.push({ target: t, kind, scope: s });
   };
   for (const st of analysis.statements) {
     add(st.program, "exec");
