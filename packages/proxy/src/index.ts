@@ -8,3 +8,4 @@ export * from "./repair.js";
 export * from "./profiles.js";
 export * from "./budget.js";
 export * from "./loopdetector.js";
+export * from "./notes.js";
