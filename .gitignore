@@ -1,0 +1,6 @@
+node_modules/
+dist/
+.tinystrap/
+*.tsbuildinfo
+__pycache__/
+coverage/

@@ -1,0 +1,12 @@
+{
+  "name": "@tinystrap/cli",
+  "version": "0.0.0",
+  "type": "module",
+  "main": "src/main.ts",
+  "exports": { ".": "./src/main.ts" },
+  "bin": { "tinystrap": "./src/main.ts" },
+  "dependencies": {
+    "@tinystrap/core": "workspace:*",
+    "@tinystrap/discovery": "workspace:*"
+  }
+}
