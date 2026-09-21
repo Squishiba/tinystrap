@@ -24,7 +24,8 @@ have landed; the end-to-end loop is not yet runnable.
 
 **What does not exist yet**
 
-- Model adapters (the pieces that talk to specific inference servers).
+- Model adapters (host integrations for OpenCode and pi — thin plugins that
+  point the host's model base URL at the tinystrap proxy).
 - The verifier and the promotion broker.
 - Sandbox backends.
 - The benchmark harness.

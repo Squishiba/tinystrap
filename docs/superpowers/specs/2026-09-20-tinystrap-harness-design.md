@@ -91,8 +91,9 @@ Carried over from DESIGN.md unchanged:
 - Building a general-purpose host security product.
 - Treating a prompt or system instruction as a sufficient security boundary.
 - Letting the model decide whether its own work is safe to promote.
-- Automatically pushing to a remote repository. **Never auto-push** is a hard
-  rule, not merely a default.
+- Automatically pushing to a remote repository. **No push without explicit
+  per-task user approval** is a hard rule, not merely a default — the model
+  never pushes (§9.10).
 - Automatically accepting every change merely because tests pass.
 - Requiring a single model provider or local inference server.
 
@@ -168,7 +169,10 @@ Added principles:
 ```
 
 The protected-project → task-workspace → patch → verifier → promotion pipeline
-from DESIGN.md §5 is unchanged.
+from DESIGN.md §5 is unchanged. The task workspace is produced by a pluggable
+**WorkspaceProvider** (§9.2): an independent temporary clone by default, or a
+host-supplied directory (e.g. an AO (Agent Orchestrator) or git worktree) in
+external mode.
 
 ## 6. Stack and package layout
 
@@ -226,8 +230,12 @@ Illustrative shape (not exhaustive; all keys optional):
 # base_url omitted → discovered (§8)
 model = "qwen3.5-9b"          # overrides discovered default
 
+[workspace]
+provider = "independent-clone" # independent-clone | external (§9.2)
+# path: required when provider = "external"
+
 [promotion]
-mode = "apply"                # apply | export_patch | commit_task_branch
+mode = "apply"                # apply | export_patch | commit_task_branch | open_pr
 
 [snapshot]
 allow_ignored_dirs = ["node_modules"]   # DESIGN.md open question 5, resolved §9.2
@@ -245,6 +253,12 @@ guidance = true
 reasoning_control = true
 pinned_notes = true
 ```
+
+The `[workspace]` table selects the WorkspaceProvider (§9.2):
+`independent-clone` (the default) or `external` (adopt a host-supplied
+directory, e.g. an AO or git worktree, whose `path` is then required). This
+stays inside the one `tinystrap.toml`; no new config files or locations are
+introduced.
 
 ## 8. Zero-input server discovery (hard requirement)
 
@@ -328,10 +342,41 @@ firm decision:
 - Baseline record format: as in DESIGN.md §6.2 (`taskId`, `revision`,
   `manifestHash`, `trackedChangesHash`, `untrackedPolicy`, …).
 
+**Workspace provider (pluggable).** Workspace creation is delegated to a
+`WorkspaceProvider` so the strong standalone guarantee can be swapped for a
+host-supplied workspace without touching the rest of the pipeline. The provider
+is selected in `[workspace]` in `tinystrap.toml` (§7); `independent-clone` is
+the default.
+
+```ts
+interface WorkspaceProvider {
+  create(baseline: Baseline): Promise<TaskWorkspace>  // fresh independent clone
+  adopt(path: Path): Promise<TaskWorkspace>           // host-supplied directory
+}
+```
+
+| Provider | How the workspace is made | Git-metadata isolation | Used when |
+| --- | --- | --- | --- |
+| `independent-clone` (default) | fresh independent temporary clone from the baseline; no origin linkage to the protected project | **Structural.** The model cannot write Git metadata of the protected project or the clone's origin linkage; the project's `.git` internals are never reachable from the agent process | standalone CLI (§13.5); any host when the harness owns the workspace |
+| `external` | host-supplied directory adopted as-is (e.g. an AO or git worktree) | **Not structural.** The workspace shares the host's `.git` and the worker runs with the user's full permissions | host-integrated and inside-AO modes (§13.5) |
+
+With `external`, git-metadata isolation is **not structural**: it depends on
+the policy engine denying git push, branch deletion, ref updates, and other git
+write operations whose effects reach outside the workspace, plus the
+credential-scrubbing rules (baseline secret exclusions above, hidden
+credentials in §9.8). In **both** providers the verifier and the promotion
+broker operate on the **extracted patch** — never on the workspace directory as
+a whole — so the promotion guarantees hold regardless of which provider made
+the workspace.
+
 ### 9.3 Task workspace
 
 Unchanged from DESIGN.md §6.3, with the layout relocated under
-`.tinystrap/tasks/<task-id>/` (project-local, disposable, git-ignored).
+`.tinystrap/tasks/<task-id>/` (project-local, disposable, git-ignored). With
+the **external** provider (§9.2) the adopted host directory **is** the task
+workspace: it is not disposable by the harness — task state still lives in the
+`.tinystrap/` data dir, but the workspace directory itself outlives the task
+and its lifecycle belongs to the host.
 
 ### 9.4 Provider-stream proxy
 
@@ -452,6 +497,11 @@ container**. Backend selection is discovered (which is available on this
 machine) and overridable in config; `doctor` reports the active backend.
 **Policy alone is not a security boundary** — with no backend available, the
 harness runs with workspace discipline only and `doctor` says so explicitly.
+**Git worktrees are not a sandbox:** a worktree isolates git working state
+only — the worker runs with the user's full permissions and shares one `.git`
+directory with all other worktrees, so it can push, delete branches, or alter
+refs unless policy stops it. The OS-level sandbox remains the only layer that
+truly contains a process, and it stays deferred and pluggable.
 The per-phase sandbox profiles from DESIGN.md §6.9 (implementation /
 verification / promotion) stand unchanged.
 
@@ -480,10 +530,25 @@ development) and resolves DESIGN.md open questions 6 and 7:
 - **Drift:** blind promotion is refused; the user is offered rebase or review
   (§14).
 - `export_patch` **remains a mode** (`apply` | `export_patch` |
-  `commit_task_branch`), as does `auto_promote` for repositories the user
-  explicitly configures — but the interactive one-key default is the shipped
-  behavior.
-- **Never auto-push**, under any mode or configuration.
+  `commit_task_branch` | `open_pr`), as does `auto_promote` for repositories
+  the user explicitly configures — but the interactive one-key default is the
+  shipped behavior.
+- **`open_pr` mode (new).** The promotion broker — **never the model** — pushes
+  **only the task branch** (never `main`, never force) and opens a pull
+  request. It does so **only after explicit per-task user approval**, and only
+  if the repository opts in via `tinystrap.toml` — no other configuration
+  turns it on. The push carries the already-verified task state, and which
+  branch is pushed is part of the permission prompt. This composes with AO's
+  (or any host's) PR/CI/review/merge flow: the PR appears in the host's normal
+  tracking and CI, reviews happen there, and merging stays a human action
+  (§13.5).
+- **No push without explicit per-task user approval; the model never pushes.**
+  This sharpens DESIGN.md's "never auto-push" (still a hard rule, not a
+  default): no push happens automatically or in the background, `open_pr` is
+  the only mode that pushes at all, and even it requires the per-task approve
+  plus the per-repository opt-in above. The model itself cannot push — the
+  broker is the only component that ever pushes a task branch to a remote.
+  There is no automatic push under any other mode or configuration.
 
 ## 10. The provider-stream proxy and the M5 streaming gate
 
@@ -722,6 +787,57 @@ Unchanged from DESIGN.md §10: every significant action produces a
 `script_rescanned`. No secrets or full sensitive arguments in logs — hashes,
 redacted summaries, decision context.
 
+### 13.5 Deployment modes
+
+tinystrap runs standalone and inside other toolchains. **No host change is
+required**: integration is entirely a model **base URL** pointing at the proxy
+(§10) plus a **workspace** supplied to or created by the harness (§9.2).
+
+**Mode 1 — standalone CLI (default).** The harness owns the whole task
+lifecycle: create the task, launch the agent, run verification, control
+promotion (§11). The workspace comes from the **independent-clone** provider
+(§9.2). This is tinystrap used as its own tool.
+
+**Mode 2 — host-integrated.** OpenCode or pi runs — launched by the harness or
+by another orchestrator — with its model base URL pointed at the tinystrap
+proxy, so the streaming gate and the policy engine apply to whatever the host
+does. The workspace is independent-clone when the harness launches the host,
+or **external** when another orchestrator supplies the directory.
+
+**Mode 3 — inside AO (Agent Orchestrator).** An AO worker runs pi or opencode
+configured with the proxy as its model endpoint, and AO passes its per-worker
+git worktree to tinystrap as the **external** workspace (§9.2). Promotion uses
+**open_pr** (§9.10), so the result appears in AO's own PR/CI/review/merge flow
+and is tracked there like any other PR.
+
+**Guarantees per mode.** Policy gate = deterministic policy before any side
+effect; streaming preflight = mid-stream early interruption; workspace
+isolation = structural workspace isolation; verification = fresh-workspace
+re-verify; promotion control = human-gated, broker-only promotion; OS
+containment = OS-level sandbox (§9.8):
+
+| Guarantee            | 1. Standalone | 2. Host-integrated                          | 3. Inside AO            |
+| -------------------- | ------------- | ------------------------------------------- | ----------------------- |
+| Policy gate          | yes           | yes (to verify)                            | yes (to verify)        |
+| Streaming preflight  | yes           | yes (to verify)                            | yes (to verify)        |
+| Workspace isolation  | yes           | partial (structural only when the harness owns the workspace) | no (external: not structural) |
+| Verification         | yes           | yes                                         | yes                     |
+| Promotion control    | yes           | yes                                         | yes                     |
+| OS containment       | no (deferred, §9.8) | no (deferred, §9.8)                    | no (deferred, §9.8)     |
+
+These two guarantees are **to verify** in the host modes. Streaming preflight
+has only been verified against llama.cpp (Appendix A spike results; Ollama and
+LM Studio untested). The policy gate depends on mapping each host's tool names
+and argument shapes (OpenCode, pi) onto the effect classifier, which has not
+been done or tested, and on how the proxy learns the current task and phase
+when the host owns the lifecycle (open question 10).
+
+In modes 2 and 3 with an external workspace, git-metadata isolation is **not
+structural** and rests on the policy engine denying git push, branch deletion,
+ref updates, and other git writes that reach outside the workspace, plus the
+credential-scrubbing rules (§9.2). Nothing in this section has been tested
+against a real AO worker yet — **to verify** (Appendix A11).
+
 ## 14. Error handling
 
 | Failure                                | Behavior                                                                                     |
@@ -770,12 +886,13 @@ plan interleaves the spike, proxy, and bench work:
 1. **SPIKE** (§10.3) — throwaway. Record real streams from llama.cpp, Ollama,
    LM Studio; confirm discovery probes (§8); check reasoning-continuation
    support (§12.6). Output: fixture corpus + answers, not product code.
-2. **M1 + M2 — core lifecycle and policy.** Task lifecycle, snapshot (§9.2),
-   patch extraction, export-only mode; tool registry, phase capability
-   profiles, path policy, write/read-before-edit guards, **effect classifier,
-   shell + Python analyzers, script provenance, evasion detector**, structured
-   denials. **Config (§7) and `doctor` (§8.1) ship here** — nothing lands
-   before the one-file config and doctor exist.
+2. **M1 + M2 — core lifecycle and policy.** Task lifecycle, snapshot (§9.2)
+   with the **WorkspaceProvider interface** (`independent-clone` and `external`
+   providers), patch extraction, export-only mode; tool registry, phase
+   capability profiles, path policy, write/read-before-edit guards, **effect
+   classifier, shell + Python analyzers, script provenance, evasion
+   detector**, structured denials. **Config (§7) and `doctor` (§8.1) ship
+   here** — nothing lands before the one-file config and doctor exist.
 3. **Proxy + M5 streaming gate + small-model layer.** Provider-stream proxy
    (§10), early interruption and mid-stream rewrite, fallback two-stage
    protocol, and §12 mechanisms — all exercised against a **fake streaming
@@ -784,7 +901,8 @@ plan interleaves the spike, proxy, and bench work:
    blocking hooks + filtering + logging.
 5. **M4 — verifier + promotion broker.** Clean verifier workspace, patch
    integrity, auto-detected verify commands (§9.9), drift detection, one-key
-   approve flow with rollback checkpoint and post-apply checks (§9.10).
+   approve flow with rollback checkpoint and post-apply checks, and the
+   **`open_pr` mode** (task-branch push + PR creation after approval) (§9.10).
 6. **Bench harness** — **starts alongside step 3**, not after it: the
    small-model layer needs ablation data while it is still being tuned. Own
    suite first, then Aider Polyglot driver, then Terminal-Bench driver.
@@ -856,15 +974,33 @@ Each has a recommended default; none blocks the build.
    `*.pem`, `id_*`, credential stores, token patterns) plus user
    extend/exclude in config; false-excludes are recoverable since the
    protected project is never modified.
+9. **Does AO expose a per-worker model-endpoint setting for pi/opencode?**
+   The inside-AO mode (§13.5) needs the proxy URL configured per worker.
+   Whether AO exposes such a setting is **unknown**, and the plan does not
+   rely on it. Fallback: configure the host tool's own provider setting (for
+   example the OpenCode provider config or pi's provider/model config) in the
+   worker's workspace or environment so its model endpoint points at the
+   tinystrap proxy. **to verify** against a real AO worker.
+10. **How does the proxy learn the current phase/task when the host owns the
+    lifecycle in external mode?** *Default:* the host hands the task/phase in
+    explicitly (e.g. `tinystrap task attach`) and the proxy reads the
+    `.tinystrap/` state inside the adopted workspace. **to verify** against a
+    real host integration.
 
 ## 19. Recommended defaults (supersedes DESIGN.md §14 where changed)
 
 ```text
 Protected project writes:       never direct from the model
 Task workspace:                 disposable, read/write
+Workspace provider:             independent-clone by default; external only when
+                                configured (host-supplied directory; no
+                                structural git isolation)
 Default promotion mode:         apply after diff+report, one-key approve
-                                (export_patch and commit_task_branch remain modes)
-Automatic push:                 always disabled — never configurable on
+                                (export_patch, commit_task_branch and open_pr
+                                remain modes)
+Automatic push:                 no push without explicit per-task approval;
+                                the model never pushes (open_pr pushes only the
+                                task branch, per-task approved, never force)
 Config:                         tinystrap.toml + optional user defaults; nothing else
 Task state:                     .tinystrap/ (disposable)
 Server/model/context:           discovered, zero input; config overrides
@@ -915,3 +1051,5 @@ server: llama.cpp b10934, model `Qwen3.8-Flash-Next-AP-Q4_K_M`,
 | 8 | Server support for forced reasoning-close (continuation) | §12.6 | **Partial** — per-request thinking-off verified on llama.cpp via `chat_template_kwargs {"enable_thinking": false}` (zero reasoning chunks; generic `thinking: {"type": "disabled"}` rejected/ignored). **Mid-stream forced close (interrupt then resume) NOT tested — stays open**; the loop-detector's "close reasoning" escalation step (§12.6) depends on it. Evidence: `fixtures/reasoning.jsonl:1` |
 | 9 | little-coder reference scores: Polyglot 45.6% / 78.7%; TB 2.0 24.6% / 9.2%; TB-Core ~6h50m/80 tasks | §15 | Open (re-read README + own runs) |
 | 10 | **New (spike):** is the reported `n_ctx` (128000) the **total** or the **per-slot** context (observed `total_slots` 4)? | §8, §12.3 | **To verify** — discovery must determine it (e.g. slot-info probe / `GET /slots`) before context budgeting relies on the number; budgets must not assume either reading |
+| 11 | **New (deploy modes):** whether AO exposes a per-worker model-endpoint setting for pi/opencode is **unknown** and the plan does not rely on it (fallback: the host tool's own provider setting — OpenCode provider config or pi's provider/model config — in the worker's workspace or environment) | §13.5, §18 | **To verify** — nothing here has been tested against a real AO worker yet |
+| 12 | **New (deploy modes):** how the proxy learns the current phase/task when the host owns the task lifecycle in external mode | §13.5, §18 | **To verify** — default: explicit host handoff (`tinystrap task attach`) plus `.tinystrap/` state |
