@@ -1,6 +1,6 @@
 # Spike: Streams and Discovery Implementation Plan
 
-> For agentic workers: REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (- [ ]) syntax for tracking.
+> For agentic workers: REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (- [x]) syntax for tracking.
 
 **Goal:** Record real streaming tool-call responses and discovery-probe results from llama.cpp, Ollama, and LM Studio, and produce a written findings file that resolves every spec Appendix A item the spike can resolve.
 
@@ -78,7 +78,7 @@ Assumed default endpoints (overridable by environment variables; all **to verify
   - `redact.redact(obj: object) -> object` — deep-copies dicts/lists, replaces values under keys matching `(?i)authorization|api[_-]?key|token|secret` with `"[redacted]"`.
 
 Steps:
-- [ ] Write failing test `spike/tests/test_redact.py`:
+- [x] Write failing test `spike/tests/test_redact.py`:
 
 ```python
 import unittest
@@ -102,8 +102,8 @@ if __name__ == "__main__":
     unittest.main()
 ```
 
-- [ ] Run: `python -m unittest spike.tests.test_redact -v` from repo root. Expected: FAIL — `ModuleNotFoundError: No module named 'spike'` until `spike/__init__.py` and `spike/tests/__init__.py` exist; create them (empty) and re-run; expected FAIL then becomes `ModuleNotFoundError: No module named 'spike.redact'`.
-- [ ] Implement `spike/redact.py`:
+- [x] Run: `python -m unittest spike.tests.test_redact -v` from repo root. Expected: FAIL — `ModuleNotFoundError: No module named 'spike'` until `spike/__init__.py` and `spike/tests/__init__.py` exist; create them (empty) and re-run; expected FAIL then becomes `ModuleNotFoundError: No module named 'spike.redact'`.
+- [x] Implement `spike/redact.py`:
 
 ```python
 import re
@@ -121,8 +121,8 @@ def redact(obj):
     return obj
 ```
 
-- [ ] Run tests. Expected: PASS (2 tests).
-- [ ] Implement `spike/servers.py`:
+- [x] Run tests. Expected: PASS (2 tests).
+- [x] Implement `spike/servers.py`:
 
 ```python
 import os
@@ -159,7 +159,7 @@ def check_available(name, timeout=2.0):
         return False
 ```
 
-- [ ] Implement `spike/httpclient.py`:
+- [x] Implement `spike/httpclient.py`:
 
 ```python
 import urllib.error
@@ -180,9 +180,9 @@ def request(method, url, body=None, headers=None, timeout=30.0):
         raise ServerGone(f"{url}: {e}") from e
 ```
 
-- [ ] Write `spike/README.md`: throwaway notice (copy the THROWAWAY NOTICE section of this plan), the server table, `python -m spike.run_spike` usage (entry added in Task 6), and the statement that fixtures survive and code does not.
-- [ ] Run full spike test suite: `python -m unittest discover spike/tests -v`. Expected: PASS.
-- [ ] Commit:
+- [x] Write `spike/README.md`: throwaway notice (copy the THROWAWAY NOTICE section of this plan), the server table, `python -m spike.run_spike` usage (entry added in Task 6), and the statement that fixtures survive and code does not.
+- [x] Run full spike test suite: `python -m unittest discover spike/tests -v`. Expected: PASS.
+- [x] Commit:
 
 ```bash
 git add spike/
@@ -205,7 +205,7 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
   - `sse.tool_call_summary(records: list[dict]) -> dict` — given parsed OpenAI-style chunk records, returns `{"has_tool_calls": bool, "name_first_chunk": int|None, "arg_chunks": int, "arg_total_len": int, "reasoning_chunks": int}` where indices are positions among `data` records that JSON-parse to objects; `name_first_chunk` is the index of the first chunk carrying a non-empty tool-call `function.name`; `arg_chunks` counts chunks carrying any `function.arguments` fragment; `reasoning_chunks` counts chunks with a non-empty `reasoning` or `reasoning_content` field in `delta`.
 
 Steps:
-- [ ] Write failing test `spike/tests/test_sse.py`:
+- [x] Write failing test `spike/tests/test_sse.py`:
 
 ```python
 import unittest
@@ -248,8 +248,8 @@ if __name__ == "__main__":
     unittest.main()
 ```
 
-- [ ] Run: `python -m unittest spike.tests.test_sse -v`. Expected: FAIL — `ModuleNotFoundError: No module named 'spike.sse'`.
-- [ ] Implement `spike/sse.py`:
+- [x] Run: `python -m unittest spike.tests.test_sse -v`. Expected: FAIL — `ModuleNotFoundError: No module named 'spike.sse'`.
+- [x] Implement `spike/sse.py`:
 
 ```python
 import json
@@ -300,8 +300,8 @@ def tool_call_summary(records):
             "arg_total_len": arg_len, "reasoning_chunks": reasoning}
 ```
 
-- [ ] Run tests. Expected: PASS (4 tests).
-- [ ] Commit:
+- [x] Run tests. Expected: PASS (4 tests).
+- [x] Commit:
 
 ```bash
 git add spike/sse.py spike/tests/test_sse.py
@@ -326,7 +326,7 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
   - `discovery.probe_all(out_dir: pathlib.Path) -> dict` — for each available server, GETs its endpoints (llama.cpp: `/props`; Ollama: `/api/tags`, then `/api/show` per model with body `{"name": <model>}`; LM Studio: `/v1/models` and `/api/v0/models` — both recorded since the canonical one is **to verify**; llama.cpp + Ollama also GET `/v1/models` where applicable), writes each raw response as one JSONL line `{"server","endpoint","status","body"}` to `<out_dir>/discovery.jsonl`, returns `{"server": "available"|"not available", ...}` availability map. Never raises for an absent server.
 
 Steps:
-- [ ] Write failing test `spike/tests/test_contextlen.py`:
+- [x] Write failing test `spike/tests/test_contextlen.py`:
 
 ```python
 import unittest
@@ -358,8 +358,8 @@ if __name__ == "__main__":
     unittest.main()
 ```
 
-- [ ] Run: `python -m unittest spike.tests.test_contextlen -v`. Expected: FAIL — `ModuleNotFoundError: No module named 'spike.contextlen'`.
-- [ ] Implement `spike/contextlen.py`:
+- [x] Run: `python -m unittest spike.tests.test_contextlen -v`. Expected: FAIL — `ModuleNotFoundError: No module named 'spike.contextlen'`.
+- [x] Implement `spike/contextlen.py`:
 
 ```python
 def _first_int(d, keys):
@@ -388,8 +388,8 @@ def extract_lmstudio(models):
             for m in (models.get("data") or [])]
 ```
 
-- [ ] Run tests. Expected: PASS (4 tests).
-- [ ] Implement `spike/discovery.py`:
+- [x] Run tests. Expected: PASS (4 tests).
+- [x] Implement `spike/discovery.py`:
 
 ```python
 import json
@@ -458,8 +458,8 @@ def _ollama_show_probes(base):
     return out
 ```
 
-- [ ] Manual smoke (no server needed): `python -c "from spike.discovery import probe_all; print(probe_all('docs/superpowers/spike-findings'))"` — with zero servers running, expected output: all three `not available`, empty `discovery.jsonl` created, exit code 0.
-- [ ] Commit:
+- [x] Manual smoke (no server needed): `python -c "from spike.discovery import probe_all; print(probe_all('docs/superpowers/spike-findings'))"` — with zero servers running, expected output: all three `not available`, empty `discovery.jsonl` created, exit code 0.
+- [x] Commit:
 
 ```bash
 git add spike/discovery.py spike/contextlen.py spike/tests/test_contextlen.py
@@ -483,7 +483,7 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
   - `streams.pick_model(availability: dict, discovery_bodies: list[dict]) -> dict[str, str]` — first model id seen per server from discovery fixtures; llama.cpp falls back to `"*"` (its `/props` default model).
 
 Steps:
-- [ ] Implement `spike/streams.py`:
+- [x] Implement `spike/streams.py`:
 
 ```python
 import json
@@ -582,8 +582,8 @@ def pick_model(availability, discovery_bodies):
     return picked
 ```
 
-- [ ] No unit test for the network body (throwaway thin code); the pure parts (`parse_stream`, `tool_call_summary`) are already tested. Guard the module against import errors with: `python -c "import spike.streams"` — expected: no error.
-- [ ] Commit:
+- [x] No unit test for the network body (throwaway thin code); the pure parts (`parse_stream`, `tool_call_summary`) are already tested. Guard the module against import errors with: `python -c "import spike.streams"` — expected: no error.
+- [x] Commit:
 
 ```bash
 git add spike/streams.py
@@ -609,7 +609,7 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
     3. `continue_after_reasoning`: first request with thinking on and a short `max_tokens` so generation stops mid-reasoning; second request appends the partial assistant reasoning and asks the server to continue (`continue: true` field, else a trailing assistant message) — supported if the second response yields non-reasoning content without repeating the reasoning.
 
 Steps:
-- [ ] Implement `spike/reasoning.py`:
+- [x] Implement `spike/reasoning.py`:
 
 ```python
 import json
@@ -669,8 +669,8 @@ def probe_all(out_dir, model_for):
     return verdicts
 ```
 
-- [ ] Guard: `python -c "import spike.reasoning"` — expected: no error.
-- [ ] Commit:
+- [x] Guard: `python -c "import spike.reasoning"` — expected: no error.
+- [x] Commit:
 
 ```bash
 git add spike/reasoning.py
@@ -695,7 +695,7 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
   - `run_spike.main()` — orchestrates: probe_all → pick_model → record_all → reasoning.probe_all → analyze → write `findings.md` and copy fixtures into `docs/superpowers/spike-findings/fixtures/`. Prints the availability map first so partial runs are obvious.
 
 Steps:
-- [ ] Write failing test `spike/tests/test_analyze.py`:
+- [x] Write failing test `spike/tests/test_analyze.py`:
 
 ```python
 import unittest
@@ -724,8 +724,8 @@ if __name__ == "__main__":
     unittest.main()
 ```
 
-- [ ] Run: `python -m unittest spike.tests.test_analyze -v`. Expected: FAIL — `ModuleNotFoundError: No module named 'spike.analyze'`.
-- [ ] Implement `spike/analyze.py`:
+- [x] Run: `python -m unittest spike.tests.test_analyze -v`. Expected: FAIL — `ModuleNotFoundError: No module named 'spike.analyze'`.
+- [x] Implement `spike/analyze.py`:
 
 ```python
 APPENDIX = [
@@ -766,8 +766,8 @@ def build_findings(availability, stream_lines, reasoning_verdicts):
     return "\n".join(out)
 ```
 
-- [ ] Run tests. Expected: PASS (2 tests).
-- [ ] Implement `spike/run_spike.py`:
+- [x] Run tests. Expected: PASS (2 tests).
+- [x] Implement `spike/run_spike.py`:
 
 ```python
 import json
@@ -805,10 +805,10 @@ if __name__ == "__main__":
     main()
 ```
 
-- [ ] Run: `python -m unittest discover spike/tests -v`. Expected: PASS (all suites).
-- [ ] **Live run with whatever servers the user has running:** `python -m spike.run_spike`. Expected: availability map printed; fixtures written; `findings.md` written. With zero servers: everything recorded `not available`, findings still generated.
-- [ ] Manually review `findings.md`; where fixtures show concrete endpoint shapes, replace the corresponding `to verify against recorded fixtures` line with the observed shape + fixture evidence (`file:line`). Do not invent results for absent servers — leave them `not available`.
-- [ ] Commit fixtures + findings:
+- [x] Run: `python -m unittest discover spike/tests -v`. Expected: PASS (all suites).
+- [x] **Live run with whatever servers the user has running:** `python -m spike.run_spike`. Expected: availability map printed; fixtures written; `findings.md` written. With zero servers: everything recorded `not available`, findings still generated.
+- [x] Manually review `findings.md`; where fixtures show concrete endpoint shapes, replace the corresponding `to verify against recorded fixtures` line with the observed shape + fixture evidence (`file:line`). Do not invent results for absent servers — leave them `not available`.
+- [x] Commit fixtures + findings:
 
 ```bash
 git add docs/superpowers/spike-findings/

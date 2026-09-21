@@ -249,26 +249,37 @@ pinned_notes = true
 ## 8. Zero-input server discovery (hard requirement)
 
 The harness probes the running local server and learns **which models exist**
-and **their context lengths** with no user input. Exact endpoints are
-**to verify against each server's docs** before implementation; the SPIKE
-(§10.3) confirms them empirically.
+and **their context lengths** with no user input. The SPIKE (§10.3) ran on
+2026-09-21 against a llama.cpp server (b10934, LAN `LAN-HOST:8080` —
+recorded spike evidence only, never a configured default); statuses below
+reflect it, evidence in `docs/superpowers/spike-findings/`.
 
 | Server             | Probe                                                              | What it yields                          | Status |
 | ------------------ | ------------------------------------------------------------------ | --------------------------------------- | ------ |
-| OpenAI-compatible  | `GET /v1/models`                                                    | model ids                               | to verify (standard endpoint; context length usually absent) |
-| llama.cpp          | `GET /props`                                                        | default model, n_ctx, chat-template caps | to verify |
-| Ollama             | `GET /api/tags` + `POST /api/show` per model                        | model list, context window, parameters   | to verify |
-| LM Studio          | model-listing endpoint of its local REST server (`GET /v1/models`, model details) | model ids, loaded/installed state, context length | to verify |
+| OpenAI-compatible  | `GET /v1/models`                                                    | model ids                               | **confirmed for llama.cpp** — `data[]` entries carry `owned_by: "llamacpp"` and `meta.n_ctx` (context length is **not** absent there, contrary to this row's earlier parenthetical); other OpenAI-compatible servers: to verify |
+| llama.cpp          | `GET /props`                                                        | `model_alias` (model), `default_generation_settings.n_ctx`, `build_info`, `total_slots`, `chat_template_caps` (`supports_tool_calls`, `supports_preserve_reasoning`, …) | **confirmed with corrected key paths** — the previously assumed top-level `default_model` / `n_ctx` / `context_size` keys are refuted |
+| Ollama             | `GET /api/tags` + `POST /api/show` per model                        | model list, context window, parameters   | to verify (server not available during the spike) |
+| LM Studio          | model-listing endpoint of its local REST server (`GET /v1/models`, model details) | model ids, loaded/installed state, context length | to verify (server not available during the spike) |
+
+Note: llama.cpp's `/v1/models` returns **both** a `models` compatibility array
+and the OpenAI-shaped `data` array; consumers must read `data`.
 
 Server identity is itself discovered (which of llama.cpp / Ollama / LM Studio
-answers on the probed port) via server-identifying routes and response shapes;
-**to verify** per server.
+answers on the probed port) via server-identifying routes and response shapes.
+**Confirmed for llama.cpp** by response shape: `/props` returning
+`build_info`/`model_alias`/`chat_template_caps`, independently by `/v1/models`
+entries with `owned_by: "llamacpp"` plus a `meta` block; an unrelated listener
+returning 404 on both routes was correctly excluded. Identification of Ollama
+and LM Studio: **to verify**.
 
 Discovery outputs feed the rest of the system:
 
 - **Discovered context length drives context budgets** (§12.3): the budget
   engine sizes truncation, compaction, and file-slice limits from the actual
-  `n_ctx` of the selected model, never a hardcoded guess.
+  `n_ctx` of the selected model, never a hardcoded guess. Caveat from the
+  spike: the observed server reports `n_ctx` 128000 with `total_slots` 4, and
+  whether `n_ctx` is the **total** or **per-slot** window is undetermined —
+  budgets must not assume either until discovery resolves it (Appendix A10).
 - **Model family selects the profile** (§12.1): the discovered model id is
   matched against bundled profile data files to pick tool set, thinking
   behavior, and repair strictness.
@@ -512,6 +523,16 @@ The proxy applies the DESIGN.md §6.7 preflight lifecycle to the live stream:
 partial tool-name check, partial-argument check (path-complete write targets,
 unambiguously forbidden commands), full validation on complete arguments.
 
+**Spike result (llama.cpp b10934, `docs/superpowers/spike-findings/`):**
+tool-call arguments arrive incrementally (observed 6 fragments totalling 24
+chars); the tool **name arrives in the same chunk as the first argument
+fragment** — never name-before-arguments as a separate chunk, but the name is
+available before any substantive argument content; reasoning streams
+separately as `reasoning_content` deltas. **Early interruption is therefore
+feasible on llama.cpp**, and the unknown-tool check happens at that first
+name-bearing chunk. Servers whose streams cannot support this fall back to the
+§10.3 two-stage protocol (Ollama / LM Studio: untested — servers absent).
+
 When the gate trips **mid-stream**, the proxy:
 
 1. **cancels the upstream generation** (aborts the request to the model
@@ -527,7 +548,11 @@ DESIGN.md §6.7 examples on the next turn. The forbidden side effect never
 starts: the tool call is never forwarded for execution, and the adapter hooks
 would block it again if it somehow were.
 
-### 10.3 The SPIKE (delivery step 1, throwaway)
+### 10.3 The SPIKE (delivery step 1, throwaway) — **executed 2026-09-21**
+
+Results in `docs/superpowers/spike-findings/findings.md`; fixtures in
+`docs/superpowers/spike-findings/fixtures/` (streams.jsonl, discovery.jsonl,
+reasoning.jsonl) are the corpus for the fake streaming provider (§17).
 
 **First implementation step of the whole project.** A throwaway spike records
 real tool-call streams from **llama.cpp, Ollama, and LM Studio** to answer
@@ -587,6 +612,12 @@ conversation compaction, **condensing of test/build output** (keep failures
 and summaries, drop boilerplate), and an **automatic repo map injected at task
 start**.
 
+Spike caveat: the observed llama.cpp server reports `n_ctx` 128000 and
+`total_slots` 4. Whether 128000 is the **total** or the **per-slot** context
+is undetermined (Appendix A10); budgeting must not assume either, and
+discovery includes a step to determine it (e.g. slot-info probe), marked **to
+verify**.
+
 ### 12.4 Edit assistance
 
 - A **read-before-edit denial includes the relevant file slice** around the
@@ -632,8 +663,14 @@ start**.
 - **Every intervention is logged with its triggering signal values** — this is
   what makes ablation (§15) and debugging possible.
 - Forced-close requires the model server to support **continuing generation
-  after closing a reasoning block** — **to verify** per server in the SPIKE;
-  where unsupported, the ladder stops at "soft nudge" and the backstop remains.
+  after closing a reasoning block**. The SPIKE verified only **per-request**
+  reasoning-off on llama.cpp b10934: `chat_template_kwargs:
+  {"enable_thinking": false}` → normal content, zero reasoning chunks (the
+  generic `thinking: {"type": "disabled"}` field was rejected/ignored).
+  **Mid-stream forced reasoning-close (interrupt then resume) was NOT tested
+  and stays to verify**; the ladder's "close reasoning on strong evidence"
+  step depends on it. Where unsupported, the ladder stops at "soft nudge" and
+  the backstop remains.
 
 ### 12.7 Pinned notes
 
@@ -861,14 +898,20 @@ providers, plugin hooks, permissions docs), plus:
 
 ## Appendix A — "to verify" register
 
-| # | Claim | Where | Resolved by |
-| - | ----- | ----- | ----------- |
-| 1 | OpenAI-compatible `/v1/models` yields usable model list (context length usually absent) | §8 | SPIKE probe |
-| 2 | llama.cpp `/props` yields model + n_ctx | §8 | SPIKE probe |
-| 3 | Ollama `/api/tags` + `/api/show` yield models + context window | §8 | SPIKE probe |
-| 4 | LM Studio model-listing endpoint shape and context length | §8 | SPIKE probe |
-| 5 | Server-type identification on a probed port | §8 | SPIKE probe |
-| 6 | Whether pi exposes partial streaming tool-call deltas | §10.1, §13.2 | pi docs + SPIKE |
-| 7 | OpenCode `execute.before` hook name/semantics in the pinned version | §13.1 | OpenCode docs at pin time |
-| 8 | Server support for forced reasoning-close (continuation) | §12.6 | SPIKE probe |
-| 9 | little-coder reference scores: Polyglot 45.6% / 78.7%; TB 2.0 24.6% / 9.2%; TB-Core ~6h50m/80 tasks | §15 | re-read README + own runs |
+Statuses updated 2026-09-21 from the executed spike
+(`docs/superpowers/spike-findings/findings.md` + `fixtures/`). Observed
+server: llama.cpp b10934, model `Qwen3.8-Flash-Next-AP-Q4_K_M`,
+`LAN-HOST:8080` (LAN) — recorded spike evidence only, not a default.
+
+| # | Claim | Where | Status |
+| - | ----- | ----- | ------ |
+| 1 | OpenAI-compatible `/v1/models` yields usable model list (context length usually absent) | §8 | **Confirmed for llama.cpp** — `data[]` entries carry `owned_by: "llamacpp"` and `meta.n_ctx` = 128000; the "context length usually absent" parenthetical is **refuted for llama.cpp**, kept open for other servers. Evidence: `fixtures/discovery.jsonl:2` |
+| 2 | llama.cpp `/props` yields model + n_ctx | §8 | **Confirmed with corrected key paths** — model = `model_alias` (or `model_path`), n_ctx = `default_generation_settings.n_ctx`; also `build_info`, `model_ftype`, `total_slots`, `is_sleeping`, `chat_template_caps` (`supports_tool_calls`, `supports_preserve_reasoning`, …). Planned top-level `default_model`/`n_ctx`/`context_size` keys refuted. Evidence: `fixtures/discovery.jsonl:1` |
+| 3 | Ollama `/api/tags` + `/api/show` yield models + context window | §8 | **Open** — server not available during the spike |
+| 4 | LM Studio model-listing endpoint shape and context length | §8 | **Open** — server not available during the spike |
+| 5 | Server-type identification on a probed port | §8 | **Confirmed for llama.cpp** by response shape (`owned_by: "llamacpp"` + `meta`; `/props` `build_info`); a non-llama.cpp 404 responder on :8080 was correctly excluded. Ollama / LM Studio identification: open |
+| 6 | Whether pi exposes partial streaming tool-call deltas | §10.1, §13.2 | Open (not exercised by the spike) |
+| 7 | OpenCode `execute.before` hook name/semantics in the pinned version | §13.1 | Open (docs at pin time) |
+| 8 | Server support for forced reasoning-close (continuation) | §12.6 | **Partial** — per-request thinking-off verified on llama.cpp via `chat_template_kwargs {"enable_thinking": false}` (zero reasoning chunks; generic `thinking: {"type": "disabled"}` rejected/ignored). **Mid-stream forced close (interrupt then resume) NOT tested — stays open**; the loop-detector's "close reasoning" escalation step (§12.6) depends on it. Evidence: `fixtures/reasoning.jsonl:1` |
+| 9 | little-coder reference scores: Polyglot 45.6% / 78.7%; TB 2.0 24.6% / 9.2%; TB-Core ~6h50m/80 tasks | §15 | Open (re-read README + own runs) |
+| 10 | **New (spike):** is the reported `n_ctx` (128000) the **total** or the **per-slot** context (observed `total_slots` 4)? | §8, §12.3 | **To verify** — discovery must determine it (e.g. slot-info probe / `GET /slots`) before context budgeting relies on the number; budgets must not assume either reading |
