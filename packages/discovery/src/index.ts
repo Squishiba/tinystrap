@@ -15,6 +15,8 @@ export interface Discovery {
   probe(): Promise<DiscoveredValues>;
 }
 
+export * from "./llamacpp.js";
+
 export class StubDiscovery implements Discovery {
   constructor(private readonly values: DiscoveredValues) {}
   async probe(): Promise<DiscoveredValues> {
