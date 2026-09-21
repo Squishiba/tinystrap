@@ -4,3 +4,4 @@ export * from "./capability.js";
 export * from "./pathpolicy.js";
 export * from "./guards.js";
 export * from "./shell.js";
+export * from "./effects.js";
