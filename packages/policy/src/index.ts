@@ -8,3 +8,4 @@ export * from "./effects.js";
 export * from "./python.js";
 export * from "./provenance.js";
 export * from "./evasion.js";
+export * from "./audit.js";
