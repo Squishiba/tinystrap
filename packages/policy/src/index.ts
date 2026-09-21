@@ -7,3 +7,4 @@ export * from "./shell.js";
 export * from "./effects.js";
 export * from "./python.js";
 export * from "./provenance.js";
+export * from "./evasion.js";
