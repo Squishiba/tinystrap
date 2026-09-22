@@ -18,6 +18,15 @@ importers:
         specifier: ^2.0.0
         version: 2.1.9(@types/node@22.20.4)
 
+  adapters/opencode:
+    dependencies:
+      '@tinystrap/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@tinystrap/policy':
+        specifier: workspace:*
+        version: link:../../packages/policy
+
   apps/cli:
     dependencies:
       '@tinystrap/core':
