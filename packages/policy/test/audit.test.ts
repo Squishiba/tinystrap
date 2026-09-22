@@ -10,3 +10,18 @@ describe("audit events", () => {
     expect(e.reason).toBe("git push forbidden");
   });
 });
+
+describe("host-layer event kinds (spec 13.4)", () => {
+  it("carries tool_executed with a tool name", () => {
+    const e = makeEvent("t1", "tool_executed", { tool: "write" });
+    expect(e.kind).toBe("tool_executed");
+  });
+  it("carries tool_failed and tool_call_repaired", () => {
+    expect(makeEvent("t1", "tool_failed", { reason: "exit 1" }).kind).toBe("tool_failed");
+    expect(makeEvent("t1", "tool_call_repaired", { tool: "edit" }).kind).toBe("tool_call_repaired");
+  });
+  it("carries host_event with the raw host type preserved", () => {
+    const e = makeEvent("t1", "host_event", { hostEventType: "session.idle" });
+    expect(e.hostEventType).toBe("session.idle");
+  });
+});
