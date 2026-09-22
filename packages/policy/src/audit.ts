@@ -3,7 +3,8 @@ export type HarnessEventKind =
   | "evasion_flagged" | "script_rescanned" | "task_created"
   | "baseline_captured" | "patch_extracted" | "patch_exported"
   | "tool_stream_started" | "tool_interrupted" | "reasoning_intervention"
-  | "tool_executed" | "tool_failed" | "tool_call_repaired" | "host_event";
+  | "tool_executed" | "tool_failed" | "tool_call_repaired" | "host_event"
+  | "guidance_updated" | "stall_escalated";
 
 export type HarnessEvent = {
   taskId: string;
