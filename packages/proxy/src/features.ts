@@ -15,4 +15,4 @@ export const DEFAULT_FEATURES: ProxyFeatures = {
 // Declared per spec 7; no server-side mechanism exists yet (spec-vs-code gap, reported).
 // runAblation refuses to treat disabling these as an experiment.
 export const UNIMPLEMENTED_FEATURES: readonly (keyof ProxyFeatures)[] =
-  ["edit_assistance", "guidance", "pinned_notes"];
+  ["guidance", "pinned_notes"];

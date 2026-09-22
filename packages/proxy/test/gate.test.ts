@@ -41,6 +41,17 @@ describe("stream gate", () => {
         function: { name: "read", arguments: '{"path":"a.ts"}' } },
     ]);
   });
+  it("applies a rewrite decision to the buffered arguments", () => {
+    const gate = gateForTest({ effect: "rewrite", args: { path: "a.ts", oldText: "fixed" },
+      reason: "edit_assistance" });
+    const chunks = [
+      chunk({ tool_calls: [{ index: 0, id: "c1",
+        function: { name: "edit", arguments: '{"path":"a.ts","oldText":"broken"}' } }] }),
+      chunk({}, "tool_calls"),
+    ];
+    for (const c of chunks) expect(gate.push(c).kind).toBe("forward");
+    expect(JSON.parse(gate.accumulated()[0].function.arguments).oldText).toBe("fixed");
+  });
   it("always forwards content and reasoning deltas", () => {
     const gate = gateForTest();
     expect(gate.push(chunk({ reasoning_content: "hmm" })).kind).toBe("forward");

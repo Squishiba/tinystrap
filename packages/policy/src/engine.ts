@@ -1,5 +1,5 @@
 import { checkExistingFileWrite, checkReadBeforeEdit } from "./guards.js";
-import { sliceAround } from "./editassist.js";
+import { closestLines, extractSpan, findNormalizedMatches, sliceAround } from "./editassist.js";
 import { detectSymlinkEscape } from "./pathpolicy.js";
 import { effectsFromFile, effectsFromShell } from "./effects.js";
 import { analyzeShell } from "./shell.js";
@@ -16,6 +16,7 @@ export type PolicyContext = {
   readSet: ReadonlySet<string>;
   exists: (normalizedPath: string) => boolean;
   readFile?: (normalizedPath: string) => string | null;
+  editAssistance?: boolean;
   realPaths: ReadonlyMap<string, string>;
   ledger: ScriptLedger;
   evasion: EvasionTracker;
@@ -96,6 +97,25 @@ export function evaluate(req: ToolRequest, ctx: PolicyContext): PolicyDecision {
         }
       }
       return decision;
+    }
+    if (req.tool === "edit" && ctx.readFile && ctx.editAssistance !== false) {
+      const oldText = typeof req.args.oldText === "string" ? req.args.oldText : null;
+      const content = ctx.readFile(target);
+      if (oldText !== null && content !== null && !content.includes(oldText)) {
+        const spans = findNormalizedMatches(content, oldText);
+        if (spans.length === 1) {
+          return { effect: "rewrite",
+            args: { ...req.args, oldText: extractSpan(content, spans[0]) },
+            reason: "edit_assistance: whitespace-normalized match applied" };
+        }
+        if (spans.length > 1) {
+          return deny("edit_denied: oldText matches several places (whitespace-insensitive).",
+            `Add more context lines. Matches start at lines: ${spans.map((s) => s.startLine + 1).join(", ")}.`, true);
+        }
+        const near = closestLines(content, oldText);
+        return deny("edit_denied: oldText not found in the file.",
+          `Closest lines:\n${near.map((c) => `${c.line + 1}: ${c.text}`).join("\n")}`, true);
+      }
     }
   }
 

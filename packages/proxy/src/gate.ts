@@ -76,6 +76,10 @@ export class StreamGate {
     try { parsed = JSON.parse(part.args) as Record<string, unknown>; }
     catch { parsed = { _raw: part.args }; }
     const d = this.opts.preflight(part.name, parsed);
+    if (d.effect === "rewrite") {
+      part.args = JSON.stringify(d.args);
+      return undefined;
+    }
     if (d.effect === "deny" || d.effect === "ask") {
       return this.trip(d.reason, part.name);
     }
