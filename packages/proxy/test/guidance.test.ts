@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { parsePlanItems, toolCards, injectGuidance, GuidanceState, GUIDANCE_SENTINEL } from "@tinystrap/proxy";
-import type { ChatMessage, ToolDefinition } from "@tinystrap/proxy";
+import { parsePlanItems, toolCards, injectGuidance, GuidanceState, GUIDANCE_SENTINEL, STALL_NUDGE, STALL_REPLAN } from "@tinystrap/proxy";
+import type { ChatMessage, ToolDefinition, ToolCall } from "@tinystrap/proxy";
 
 const tools: ToolDefinition[] = ["read", "edit", "bash", "grep"].map((n) => ({
   name: n, description: `the ${n} tool`, inputSchema: {}, capabilities: [], readOnly: n === "read" }));
@@ -29,5 +29,32 @@ describe("guidance", () => {
     g.submitPlan(["c"]);
     expect(g.planItems()).toEqual(["a", "b"]);
     expect(g.requirePlan()).toContain("plan");
+  });
+});
+
+function call(name: string, args: string): ToolCall {
+  return { id: "c", type: "function", function: { name, arguments: args } };
+}
+
+describe("stall detection", () => {
+  it("detects the third identical call", () => {
+    const g = new GuidanceState({ taskId: "t", toolCardLimit: 3 });
+    expect(g.recordCalls([call("read", '{"path":"a.ts"}')])).toBe(false);
+    expect(g.recordCalls([call("read", '{"path":"a.ts"}')])).toBe(false);
+    expect(g.recordCalls([call("read", '{"path":"a.ts"}')])).toBe(true);
+  });
+  it("detects a reverted edit", () => {
+    const g = new GuidanceState({ taskId: "t", toolCardLimit: 3 });
+    g.recordCalls([call("edit", '{"path":"a.ts","oldText":"1","newText":"2"}')]);
+    g.recordCalls([call("edit", '{"path":"a.ts","oldText":"2","newText":"3"}')]);
+    expect(g.recordCalls([call("edit", '{"path":"a.ts","oldText":"3","newText":"2"}')])).toBe(true);
+  });
+  it("escalates nudge -> replan -> stop", () => {
+    const g = new GuidanceState({ taskId: "t", toolCardLimit: 3 });
+    expect(g.escalate()).toBe("nudge");
+    expect(g.escalate()).toBe("replan");
+    expect(g.escalate()).toBe("stop");
+    expect(STALL_NUDGE.length).toBeGreaterThan(10);
+    expect(STALL_REPLAN.length).toBeGreaterThan(10);
   });
 });
