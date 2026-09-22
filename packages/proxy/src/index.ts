@@ -11,4 +11,5 @@ export * from "./loopdetector.js";
 export * from "./notes.js";
 export * from "./httpprovider.js";
 export * from "./features.js";
+export * from "./guidance.js";
 export * from "./server.js";
