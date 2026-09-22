@@ -7,3 +7,4 @@ export * from "./snapshot-git.js";
 export * from "./snapshot-manifest.js";
 export * from "./patch.js";
 export * from "./pythonast.js";
+export * from "./syntax.js";
