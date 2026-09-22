@@ -1,12 +1,14 @@
 import { createServer, type Server, type ServerResponse } from "node:http";
-import { makeEvent } from "@tinystrap/policy";
+import { makeEvent, effectSignature, effectsForHarnessTool, PIN_NOTE_TOOL, PIN_NOTE_TOOL_NAME } from "@tinystrap/policy";
 import type { HarnessEvent, ToolRegistry } from "@tinystrap/policy";
 import { formatSse, SSE_DONE } from "./sse.js";
 import { StreamGate, type Preflight } from "./gate.js";
-import { interruptionSse } from "./rewrite.js";
+import { interruptionChunks, interruptionSse } from "./rewrite.js";
 import { repairToolCalls } from "./repair.js";
 import { truncateHistory } from "./budget.js";
 import { LoopDetector } from "./loopdetector.js";
+import { NoteStore } from "./notes.js";
+import { applyPinNote, withPinnedNotes } from "./notetool.js";
 import { DEFAULT_FEATURES, type ProxyFeatures } from "./features.js";
 import type { ChatRequest, Provider, StreamChunk, ToolCall } from "./types.js";
 
@@ -21,6 +23,10 @@ export type ProxyDeps = {
 };
 
 export async function startProxy(deps: ProxyDeps, port = 0) {
+  // One NoteStore per proxy instance (one proxy per task — same lifetime
+  // assumption as bench Task 3's taskId); pinned state is not persisted
+  // across startProxy calls / task resume (out of scope, spec 12.7).
+  const notes = new NoteStore();
   const server: Server = createServer((req, res) => {
     if (req.method !== "POST" || !req.url?.endsWith("/v1/chat/completions")) {
       res.writeHead(404).end("not found");
@@ -28,7 +34,7 @@ export async function startProxy(deps: ProxyDeps, port = 0) {
     }
     const body: Buffer[] = [];
     req.on("data", (d: Buffer) => body.push(d));
-    req.on("end", () => void handle(deps, body, res));
+    req.on("end", () => void handle(deps, body, res, notes));
   });
   await new Promise<void>((resolve) => server.listen(port, "127.0.0.1", resolve));
   const addr = server.address();
@@ -60,7 +66,7 @@ function repairedChunk(calls: ToolCall[]): StreamChunk {
 }
 
 async function handle(
-  deps: ProxyDeps, body: Buffer[], res: ServerResponse,
+  deps: ProxyDeps, body: Buffer[], res: ServerResponse, notes: NoteStore,
 ): Promise<void> {
   let chatReq: ChatRequest;
   try { chatReq = JSON.parse(Buffer.concat(body).toString("utf8")) as ChatRequest; }
@@ -73,6 +79,13 @@ async function handle(
   const taskId = deps.taskId ?? "proxy";
   if (feats.context_budgeting && deps.budgetTokens !== undefined) {
     chatReq = { ...chatReq, messages: truncateHistory(chatReq.messages, deps.budgetTokens) };
+  }
+  // pin_note is a harness tool the host never implements: register it if the
+  // caller's registry does not already carry it, and re-inject the pinned
+  // block before the provider sees the request (spec 12.7).
+  if (feats.pinned_notes) {
+    if (!deps.registry.lookup(PIN_NOTE_TOOL_NAME)) deps.registry.register(PIN_NOTE_TOOL);
+    chatReq = { ...chatReq, messages: withPinnedNotes(chatReq.messages, notes.renderPinned()) };
   }
   deps.onEvent?.(makeEvent(taskId, "tool_stream_started"));
   const gate = new StreamGate({ registry: deps.registry, preflight: deps.preflight });
@@ -108,6 +121,40 @@ async function handle(
     res.write(formatSse(repairedChunk(results.map((r) => r.calls[0]))));
   };
   const flush = feats.tool_call_repair ? flushRepaired : flushPending;
+  // Intercept pin_note calls at the flush point: apply them to the note store,
+  // emit the audit event, and — when every accumulated call is pin_note —
+  // replace the raw stream with a well-formed synthetic turn the host can
+  // interpret (it does not implement pin_note). Known v1 limitation (documented):
+  // mixed pin_note + other-tool calls apply and log the notes but forward the
+  // raw stream unchanged; full tool-result plumbing is a later supervisor-plan
+  // item.
+  const flushStream = (): boolean => {
+    if (!feats.pinned_notes) { flush(); return false; }
+    const calls = gate.accumulated();
+    const pinCalls = calls.filter((c) => c.function.name === PIN_NOTE_TOOL_NAME);
+    let lastMessage = "";
+    for (const call of pinCalls) {
+      let parsed: Record<string, unknown> = {};
+      try { parsed = JSON.parse(call.function.arguments) as Record<string, unknown>; }
+      catch { parsed = {}; }
+      const out = applyPinNote(notes, parsed);
+      lastMessage = out.message;
+      deps.onEvent?.(makeEvent(taskId, "tool_executed", {
+        tool: PIN_NOTE_TOOL_NAME,
+        reason: out.message,
+        effectSignature: effectSignature(effectsForHarnessTool(PIN_NOTE_TOOL_NAME)),
+      }));
+    }
+    if (pinCalls.length > 0 && pinCalls.length === calls.length) {
+      pending.length = 0;
+      res.write(interruptionChunks(chatReq, `pin_note: ${lastMessage}`)
+        .map(formatSse).join("") + SSE_DONE);
+      res.end();
+      return true;
+    }
+    flush();
+    return false;
+  };
   try {
     for await (const chunk of deps.provider.stream(chatReq, ac.signal)) {
       const action = gate.push(chunk);
@@ -131,16 +178,17 @@ async function handle(
           return;
         }
       }
-      if (choice?.finish_reason) flush();
+      if (choice?.finish_reason && flushStream()) return;
       if (choice?.delta.tool_calls?.length) pending.push(chunk);
       else res.write(formatSse(chunk));
     }
-    flush();
+    if (flushStream()) return;
     res.write(SSE_DONE);
     res.end();
   } catch {
-    flush();
-    res.write(SSE_DONE);
-    res.end();
+    if (!flushStream()) {
+      res.write(SSE_DONE);
+      res.end();
+    }
   }
 }
