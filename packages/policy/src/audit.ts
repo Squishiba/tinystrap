@@ -3,7 +3,7 @@ export type HarnessEventKind =
   | "evasion_flagged" | "script_rescanned" | "task_created"
   | "baseline_captured" | "patch_extracted" | "patch_exported"
   | "tool_stream_started" | "tool_interrupted" | "reasoning_intervention"
-  | "tool_call_repaired";
+  | "tool_executed" | "tool_failed" | "tool_call_repaired" | "host_event";
 
 export type HarnessEvent = {
   taskId: string;
@@ -14,6 +14,7 @@ export type HarnessEvent = {
   decision?: string;
   reason?: string;
   effectSignature?: string;
+  hostEventType?: string;
 };
 
 export function makeEvent(
