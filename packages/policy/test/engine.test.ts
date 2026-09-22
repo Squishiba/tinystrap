@@ -80,6 +80,15 @@ describe("policy engine", () => {
     expect(d.effect).toBe("deny");
     if (d.effect === "deny") expect(d.reason).toMatch(/evasion_flagged/);
   });
+  it("embeds a file slice in read-before-edit denials when readFile is provided", () => {
+    const d = evaluate(req("edit", { path: "src/new.ts" }),
+      ctx({ readFile: () => "l0\nl1\nl2\nl3\nl4\nl5" }));
+    expect(d.effect).toBe("deny");
+    if (d.effect === "deny") {
+      expect(d.correction).toContain("Current content (from line 1):");
+      expect(d.correction).toContain("l2");
+    }
+  });
   it("allows a clean in-workspace edit", () => {
     expect(evaluate(req("edit", { path: "src/a.ts" }), ctx()))
       .toEqual({ effect: "allow" });

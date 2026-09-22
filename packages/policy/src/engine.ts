@@ -1,4 +1,5 @@
 import { checkExistingFileWrite, checkReadBeforeEdit } from "./guards.js";
+import { sliceAround } from "./editassist.js";
 import { detectSymlinkEscape } from "./pathpolicy.js";
 import { effectsFromFile, effectsFromShell } from "./effects.js";
 import { analyzeShell } from "./shell.js";
@@ -14,6 +15,7 @@ export type PolicyContext = {
   phaseAllowlists?: Partial<Record<Phase, readonly string[]>>;
   readSet: ReadonlySet<string>;
   exists: (normalizedPath: string) => boolean;
+  readFile?: (normalizedPath: string) => string | null;
   realPaths: ReadonlyMap<string, string>;
   ledger: ScriptLedger;
   evasion: EvasionTracker;
@@ -84,7 +86,16 @@ export function evaluate(req: ToolRequest, ctx: PolicyContext): PolicyDecision {
     }
     if ((req.tool === "edit" || req.tool === "apply_patch") &&
         !ctx.readSet.has(target)) {
-      return checkReadBeforeEdit(target, ctx.readSet);
+      const decision = checkReadBeforeEdit(target, ctx.readSet);
+      if (decision.effect === "deny" && decision.correction && ctx.readFile) {
+        const content = ctx.readFile(target);
+        if (content !== null) {
+          const slice = sliceAround(content, 0, 20);
+          return { ...decision,
+            correction: `${decision.correction}\nCurrent content (from line ${slice.startLine + 1}):\n${slice.text}` };
+        }
+      }
+      return decision;
     }
   }
 
