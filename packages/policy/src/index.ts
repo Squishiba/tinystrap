@@ -5,6 +5,7 @@ export * from "./pathpolicy.js";
 export * from "./guards.js";
 export * from "./shell.js";
 export * from "./effects.js";
+export * from "./harness.js";
 export * from "./python.js";
 export * from "./provenance.js";
 export * from "./evasion.js";
