@@ -80,8 +80,52 @@ describe("policy engine", () => {
     expect(d.effect).toBe("deny");
     if (d.effect === "deny") expect(d.reason).toMatch(/evasion_flagged/);
   });
+  it("embeds a file slice in read-before-edit denials when readFile is provided", () => {
+    const d = evaluate(req("edit", { path: "src/new.ts" }),
+      ctx({ readFile: () => "l0\nl1\nl2\nl3\nl4\nl5" }));
+    expect(d.effect).toBe("deny");
+    if (d.effect === "deny") {
+      expect(d.correction).toContain("Current content (from line 1):");
+      expect(d.correction).toContain("l2");
+    }
+  });
   it("allows a clean in-workspace edit", () => {
     expect(evaluate(req("edit", { path: "src/a.ts" }), ctx()))
       .toEqual({ effect: "allow" });
+  });
+
+  const driftFile = "alpha\nbeta gamma\ndelta";
+  const withFile = (text: string, over: Partial<PolicyContext> = {}): PolicyContext =>
+    ctx({ readFile: () => text, ...over });
+
+  it("allows an edit whose oldText matches the file exactly", () => {
+    expect(evaluate(req("edit", { path: "src/a.ts", oldText: "beta gamma" }),
+      withFile(driftFile))).toEqual({ effect: "allow" });
+  });
+  it("rewrites oldText when a whitespace-normalized match is unique", () => {
+    const d = evaluate(req("edit", { path: "src/a.ts", oldText: "beta   gamma" }),
+      withFile(driftFile));
+    expect(d.effect).toBe("rewrite");
+    if (d.effect === "rewrite")
+      expect((d.args as { oldText: string }).oldText).toBe("beta gamma");
+  });
+  it("denies when the normalized match is ambiguous, listing candidate lines", () => {
+    const d = evaluate(req("edit", { path: "src/a.ts", oldText: "same  line" }),
+      withFile("same line\nother\nsame line"));
+    expect(d.effect).toBe("deny");
+    if (d.effect === "deny") {
+      expect(d.reason).toContain("several places");
+      expect(d.correction).toContain("1, 3");
+    }
+  });
+  it("denies with closest lines when oldText is not found", () => {
+    const d = evaluate(req("edit", { path: "src/a.ts", oldText: "beta zzz" }),
+      withFile(driftFile));
+    expect(d.effect).toBe("deny");
+    if (d.effect === "deny") expect(d.correction).toContain("Closest lines:");
+  });
+  it("skips edit assistance entirely when editAssistance is false", () => {
+    expect(evaluate(req("edit", { path: "src/a.ts", oldText: "beta   gamma" }),
+      withFile(driftFile, { editAssistance: false }))).toEqual({ effect: "allow" });
   });
 });

@@ -13,9 +13,9 @@ describe("ProxyFeatures", () => {
     expect(Object.keys(DEFAULT_FEATURES).sort()).toEqual([...SPEC_7_NAMES].sort());
   });
 
-  it("marks exactly the two mechanisms that have no server implementation", () => {
+  it("marks exactly the mechanisms that have no server implementation", () => {
     expect([...UNIMPLEMENTED_FEATURES].sort()).toEqual(
-      ["edit_assistance", "guidance"].sort());
+      ["guidance"].sort());
   });
 
   it("covers every declared key with exactly one of the two lists", () => {
@@ -23,7 +23,7 @@ describe("ProxyFeatures", () => {
       const declared = SPEC_7_NAMES.includes(key);
       expect(declared).toBe(true);
       expect(UNIMPLEMENTED_FEATURES.includes(key)).toBe(
-        ["edit_assistance", "guidance"].includes(key));
+        ["guidance"].includes(key));
     }
   });
 });
