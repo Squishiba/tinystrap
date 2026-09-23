@@ -11,3 +11,4 @@ export * from "./provenance.js";
 export * from "./evasion.js";
 export * from "./audit.js";
 export * from "./engine.js";
+export * from "./editassist.js";
