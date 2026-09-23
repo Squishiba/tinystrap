@@ -10,12 +10,20 @@ export function checkExistingFileWrite(targetExists: boolean): PolicyDecision {
   };
 }
 
-export function checkReadBeforeEdit(path: string, readSet: ReadonlySet<string>): PolicyDecision {
+export function checkReadBeforeEdit(
+  path: string,
+  readSet: ReadonlySet<string>,
+  slice?: { startLine: number; text: string },
+): PolicyDecision {
   if (readSet.has(path)) return { effect: "allow" };
+  const base = `Read \`${path}\` first, then retry the edit.`;
+  const correction = slice
+    ? `${base}\nCurrent content (from line ${slice.startLine + 1}):\n${slice.text}`
+    : base;
   return {
     effect: "deny",
     reason: `\`${path}\` has not been read this task.`,
-    correction: `Read \`${path}\` first, then retry the edit.`,
+    correction,
     retryable: true,
   };
 }

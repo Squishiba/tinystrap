@@ -9,6 +9,7 @@ export * from "./profiles.js";
 export * from "./budget.js";
 export * from "./loopdetector.js";
 export * from "./notes.js";
+export * from "./notetool.js";
 export * from "./httpprovider.js";
 export * from "./features.js";
 export * from "./guidance.js";

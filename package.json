@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "test": "vitest run",
-    "typecheck": "tsc -b packages/policy packages/discovery packages/proxy packages/core apps/cli"
+"typecheck": "tsc -b packages/policy packages/discovery packages/proxy packages/core apps/cli packages/bench adapters/opencode"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
