@@ -4,7 +4,7 @@ export type HarnessEventKind =
   | "baseline_captured" | "patch_extracted" | "patch_exported"
   | "tool_stream_started" | "tool_interrupted" | "reasoning_intervention"
   | "tool_executed" | "tool_failed" | "tool_call_repaired" | "host_event"
-  | "guidance_updated" | "stall_escalated";
+  | "guidance_updated" | "stall_escalated" | "model_usage";
 
 export type HarnessEvent = {
   taskId: string;
@@ -16,6 +16,7 @@ export type HarnessEvent = {
   reason?: string;
   effectSignature?: string;
   hostEventType?: string;
+  usage?: { prompt: number; completion: number };
 };
 
 export function makeEvent(

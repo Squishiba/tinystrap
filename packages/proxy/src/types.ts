@@ -36,6 +36,7 @@ export type StreamChunk = {
     };
     finish_reason: string | null;
   }[];
+  usage?: { prompt_tokens?: number; completion_tokens?: number };
 };
 export interface Provider {
   stream(req: ChatRequest, signal?: AbortSignal): AsyncIterable<StreamChunk>;
