@@ -1,0 +1,9 @@
+{
+  "id": "ts-reverse-slice",
+  "kind": "coding",
+  "language": "typescript",
+  "prompt": "reverse.js has a bug: reverse(\"hello\") does not return \"olleh\". Fix it. Do not change the exported name.",
+  "verify": "node --test reverse.test.mjs",
+  "expected": "resolved",
+  "timeoutMs": 300000
+}

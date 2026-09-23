@@ -1,0 +1,9 @@
+{
+  "id": "ts-dedupe-order",
+  "kind": "coding",
+  "language": "typescript",
+  "prompt": "dedupe.js has a bug: dedupe([5,1,2,2,3]) should return [5,1,2,3] but drops the first element. Fix it. Do not change the exported name.",
+  "verify": "node --test dedupe.test.mjs",
+  "expected": "resolved",
+  "timeoutMs": 300000
+}

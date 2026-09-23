@@ -1,0 +1,9 @@
+{
+  "id": "ts-missing-return",
+  "kind": "coding",
+  "language": "typescript",
+  "prompt": "area.js has a bug: area(3, 4) returns undefined instead of 12. Fix it. Do not change the exported name.",
+  "verify": "node --test area.test.mjs",
+  "expected": "resolved",
+  "timeoutMs": 300000
+}

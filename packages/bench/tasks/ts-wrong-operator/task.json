@@ -1,0 +1,9 @@
+{
+  "id": "ts-wrong-operator",
+  "kind": "coding",
+  "language": "typescript",
+  "prompt": "isAdult.js has a bug: isAdult(18) should return true (18-year-olds are adults) but returns false. Fix it. Do not change the exported name.",
+  "verify": "node --test isAdult.test.mjs",
+  "expected": "resolved",
+  "timeoutMs": 300000
+}
