@@ -228,6 +228,20 @@ async function handle(
   };
   try {
     for await (const chunk of deps.provider.stream(chatReq, ac.signal)) {
+      // Token-usage capture (spec 15 metrics): OpenAI-compatible streams may
+      // report `usage` on the final chunk (llama.cpp sends it when the client
+      // requests `stream_options: { include_usage: true }` — whether the proxy
+      // must inject that flag for real runs is UNVERIFIED). Record whatever
+      // the stream carries; this is baseline instrumentation, intentionally
+      // not gated behind any ablation feature flag.
+      if (chunk.usage) {
+        deps.onEvent?.(makeEvent(taskId, "model_usage", {
+          usage: {
+            prompt: chunk.usage.prompt_tokens ?? 0,
+            completion: chunk.usage.completion_tokens ?? 0,
+          },
+        }));
+      }
       const action = gate.push(chunk);
       if (action.kind === "interrupt") {
         ac.abort();
