@@ -27,6 +27,15 @@ importers:
         specifier: workspace:*
         version: link:../../packages/policy
 
+  adapters/pi:
+    dependencies:
+      '@tinystrap/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@tinystrap/policy':
+        specifier: workspace:*
+        version: link:../../packages/policy
+
   apps/cli:
     dependencies:
       '@tinystrap/core':
