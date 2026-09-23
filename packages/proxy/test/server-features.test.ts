@@ -124,7 +124,7 @@ describe("proxy feature wiring", () => {
     };
     const proxy = await runProxy({
       provider: spy, registry: registry(), preflight: () => ({ effect: "allow" }),
-      budgetTokens: 40, features: { context_budgeting: false },
+      budgetTokens: 40, features: { context_budgeting: false, guidance: false },
     });
     await post(proxy.url, { model: "m", messages: messages(6), stream: true });
     expect(seen?.messages.length).toBe(6);

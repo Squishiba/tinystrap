@@ -14,16 +14,14 @@ describe("ProxyFeatures", () => {
   });
 
   it("marks exactly the mechanisms that have no server implementation", () => {
-    expect([...UNIMPLEMENTED_FEATURES].sort()).toEqual(
-      ["guidance"].sort());
+    expect([...UNIMPLEMENTED_FEATURES].sort()).toEqual([]);
   });
 
   it("covers every declared key with exactly one of the two lists", () => {
     for (const key of Object.keys(DEFAULT_FEATURES) as (keyof ProxyFeatures)[]) {
       const declared = SPEC_7_NAMES.includes(key);
       expect(declared).toBe(true);
-      expect(UNIMPLEMENTED_FEATURES.includes(key)).toBe(
-        ["guidance"].includes(key));
+      expect(UNIMPLEMENTED_FEATURES.includes(key)).toBe(false);
     }
   });
 });

@@ -12,4 +12,5 @@ export * from "./notes.js";
 export * from "./notetool.js";
 export * from "./httpprovider.js";
 export * from "./features.js";
+export * from "./guidance.js";
 export * from "./server.js";

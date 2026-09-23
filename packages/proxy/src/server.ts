@@ -11,7 +11,8 @@ import { LoopDetector } from "./loopdetector.js";
 import { NoteStore } from "./notes.js";
 import { applyPinNote, withPinnedNotes } from "./notetool.js";
 import { DEFAULT_FEATURES, type ProxyFeatures } from "./features.js";
-import { thinkingForRequest } from "./profiles.js";
+import { GuidanceState, parsePlanItems, toolCards, injectGuidance, STALL_NUDGE, STALL_REPLAN } from "./guidance.js";
+import { thinkingForRequest, selectProfile } from "./profiles.js";
 import type { ChatRequest, Provider, StreamChunk, ToolCall } from "./types.js";
 
 export type ProxyDeps = {
@@ -56,6 +57,21 @@ function nudgeChunk(): StreamChunk {
   return { choices: [{ index: 0, delta: { role: "assistant", content: NUDGE_TEXT }, finish_reason: null }] };
 }
 
+function jsonDocuments(s: string): string[] {
+  const docs: string[] = [];
+  let depth = 0; let inStr = false; let esc = false; let start = 0;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (esc) { esc = false; continue; }
+    if (ch === "\\") { esc = true; continue; }
+    if (ch === '"') { inStr = !inStr; continue; }
+    if (inStr) continue;
+    if (ch === "{") depth++;
+    if (ch === "}") { depth--; if (depth === 0) { docs.push(s.slice(start, i + 1)); start = i + 1; } }
+  }
+  return docs.length === 0 ? [s] : docs;
+}
+
 function repairedChunk(calls: ToolCall[]): StreamChunk {
   return {
     choices: [{
@@ -90,6 +106,17 @@ async function handle(
   }
   if (feats.context_budgeting && deps.budgetTokens !== undefined) {
     chatReq = { ...chatReq, messages: truncateHistory(chatReq.messages, deps.budgetTokens) };
+  }
+  const guidance = new GuidanceState({
+    taskId,
+    toolCardLimit: (selectProfile(chatReq.model) as { toolCardLimit?: number }).toolCardLimit ?? 3,
+  });
+  if (feats.guidance) {
+    const blocks: string[] = [];
+    if (!guidance.hasPlan()) blocks.push(guidance.requirePlan());
+    const cards = toolCards(deps.registry.all(), guidance.toolCardLimit);
+    if (cards.length > 0) blocks.push(`tool cards:\n${cards.join("\n")}`);
+    chatReq = { ...chatReq, messages: injectGuidance(chatReq.messages, blocks) };
   }
   // pin_note is a harness tool the host never implements: register it if the
   // caller's registry does not already carry it, and re-inject the pinned
@@ -131,7 +158,40 @@ async function handle(
     pending.length = 0;
     res.write(formatSse(repairedChunk(results.map((r) => r.calls[0]))));
   };
-  const flush = feats.tool_call_repair ? flushRepaired : flushPending;
+  const baseFlush = feats.tool_call_repair ? flushRepaired : flushPending;
+  // At each flush point, feed the completed calls to the guidance state; a stall
+  // escalates nudge -> replan -> stop (spec 12.5).
+  let stopRequested = false;
+  // The gate concatenates argument fragments per call slot, so a completed
+  // call's arguments may hold several back-to-back JSON documents. Split them
+  // so each completed call is recorded exactly as the model emitted it.
+  const completedCalls = (): ToolCall[] => {
+    const out: ToolCall[] = [];
+    for (const c of gate.accumulated()) {
+      for (const doc of jsonDocuments(c.function.arguments)) {
+        out.push({ id: c.id, type: "function", function: { name: c.function.name, arguments: doc } });
+      }
+    }
+    return out;
+  };
+  const flush = () => {
+    baseFlush();
+    if (!feats.guidance) return;
+    if (guidance.recordCalls(completedCalls())) {
+      const level = guidance.escalate();
+      deps.onEvent?.(makeEvent(taskId, "stall_escalated", { reason: `${level}:${guidance.stallCount()}` }));
+      if (level === "stop") {
+        ac.abort();
+        stopRequested = true;
+        res.write(interruptionSse(chatReq, "guidance: stall stop"));
+        res.end();
+        return;
+      }
+      const nudge = level === "nudge" ? STALL_NUDGE : STALL_REPLAN;
+      res.write(formatSse({ choices: [{ index: 0, delta: { content: nudge }, finish_reason: null }] }));
+    }
+  };
+  let assistantText = "";
   // Intercept pin_note calls at the flush point: apply them to the note store,
   // emit the audit event, and — when every accumulated call is pin_note —
   // replace the raw stream with a well-formed synthetic turn the host can
@@ -189,17 +249,24 @@ async function handle(
           return;
         }
       }
-      if (choice?.finish_reason && flushStream()) return;
+      assistantText += choice?.delta.content ?? "";
+      if (choice?.finish_reason) { if (flushStream()) return; if (stopRequested) return; }
       if (choice?.delta.tool_calls?.length) pending.push(chunk);
       else res.write(formatSse(chunk));
     }
+    const items = parsePlanItems(assistantText);
+    if (items.length > 0 && !guidance.hasPlan()) {
+      guidance.submitPlan(items);
+      deps.onEvent?.(makeEvent(taskId, "guidance_updated", { reason: `plan:${items.length}` }));
+    }
     if (flushStream()) return;
+    if (stopRequested) return;
     res.write(SSE_DONE);
     res.end();
   } catch {
-    if (!flushStream()) {
-      res.write(SSE_DONE);
-      res.end();
-    }
+    if (flushStream()) return;
+    if (stopRequested) return;
+    res.write(SSE_DONE);
+    res.end();
   }
 }
