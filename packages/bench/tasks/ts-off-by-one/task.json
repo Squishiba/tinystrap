@@ -1,0 +1,9 @@
+{
+  "id": "ts-off-by-one",
+  "kind": "coding",
+  "language": "typescript",
+  "prompt": "sum.js has a bug: sum([1,2,3]) returns 5 instead of 6. Fix it. Do not change the exported name.",
+  "verify": "node --test sum.test.mjs",
+  "expected": "resolved",
+  "timeoutMs": 300000
+}
