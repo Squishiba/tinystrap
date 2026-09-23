@@ -1,6 +1,7 @@
 import { createServer, type Server, type ServerResponse } from "node:http";
 import { makeEvent } from "@tinystrap/policy";
 import type { HarnessEvent, ToolRegistry } from "@tinystrap/policy";
+import type { Phase } from "@tinystrap/policy";
 import { formatSse, SSE_DONE } from "./sse.js";
 import { StreamGate, type Preflight } from "./gate.js";
 import { interruptionSse } from "./rewrite.js";
@@ -8,6 +9,7 @@ import { repairToolCalls } from "./repair.js";
 import { truncateHistory } from "./budget.js";
 import { LoopDetector } from "./loopdetector.js";
 import { DEFAULT_FEATURES, type ProxyFeatures } from "./features.js";
+import { thinkingForRequest } from "./profiles.js";
 import type { ChatRequest, Provider, StreamChunk, ToolCall } from "./types.js";
 
 export type ProxyDeps = {
@@ -18,6 +20,8 @@ export type ProxyDeps = {
   features?: Partial<ProxyFeatures>;
   taskId?: string;
   budgetTokens?: number;
+  serverCaps?: Record<string, boolean> | null;
+  phase?: () => Phase;
 };
 
 export async function startProxy(deps: ProxyDeps, port = 0) {
@@ -71,6 +75,13 @@ async function handle(
   }
   const feats = { ...DEFAULT_FEATURES, ...deps.features };
   const taskId = deps.taskId ?? "proxy";
+  if (feats.reasoning_control) {
+    const kw = thinkingForRequest(chatReq.model, deps.serverCaps ?? null, deps.phase?.() ?? "planning");
+    if (kw.chat_template_kwargs) {
+      chatReq = { ...chatReq,
+        chat_template_kwargs: { ...kw.chat_template_kwargs, ...(chatReq.chat_template_kwargs ?? {}) } };
+    }
+  }
   if (feats.context_budgeting && deps.budgetTokens !== undefined) {
     chatReq = { ...chatReq, messages: truncateHistory(chatReq.messages, deps.budgetTokens) };
   }
