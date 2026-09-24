@@ -1,14 +1,15 @@
 // Operator-gated: verifies the OpenCode adapter end-to-end against a REAL local
 // model server the operator already started. Usage:
 //   node scripts/live-host-check-opencode.mjs --base-url http://127.0.0.1:8080 --model qwen2.5-coder-7b
-// Refuses non-loopback URLs. Never run from CI.
+// Prerequisite: run `pnpm typecheck` first (this project has no separate build step; typecheck's tsc -b emits dist/ as a side effect) so the relative dist/ imports below resolve.
+// Never run from CI.
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { startProxy, HttpProvider } from "@tinystrap/proxy";
-import { createTask, extractPatch, destroyTask } from "@tinystrap/core";
-import { createToolRegistry, evaluate, ScriptLedger, EvasionTracker } from "@tinystrap/policy";
-import { OpenCodeRunner } from "@tinystrap/adapter-opencode";
+import { startProxy, HttpProvider } from "../packages/proxy/dist/index.js";
+import { createTask, extractPatch, destroyTask } from "../packages/core/dist/index.js";
+import { createToolRegistry, evaluate, ScriptLedger, EvasionTracker } from "../packages/policy/dist/index.js";
+import { OpenCodeRunner } from "../adapters/opencode/dist/index.js";
 
 const argv = process.argv.slice(2);
 const flag = (n) => argv[argv.indexOf(n) + 1];
@@ -18,8 +19,17 @@ if (!baseUrl || !model) {
   console.error("usage: live-host-check-opencode.mjs --base-url http://127.0.0.1:<port> --model <id>");
   process.exit(2);
 }
-if (!/127\.0\.0\.1|localhost/.test(baseUrl)) {
-  console.error("refusing non-loopback base URL");
+// The host (opencode) only ever talks to the local tinystrap proxy, and that
+// connection is always loopback by construction: it uses proxy.url returned by
+// startProxy(), which binds locally, never a separately configurable address.
+// --base-url is a different thing: it is where the proxy's own upstream request
+// goes (the HttpProvider target), i.e. the operator's own real model server,
+// which this project has always supported running on a LAN address, not just
+// localhost (see scripts/feasibility-mid-stream-close.mjs, which takes an
+// arbitrary operator-supplied base URL with no loopback restriction). It is
+// therefore intentionally unrestricted.
+try { new URL(baseUrl); } catch {
+  console.error(`invalid --base-url: ${baseUrl}`);
   process.exit(2);
 }
 
