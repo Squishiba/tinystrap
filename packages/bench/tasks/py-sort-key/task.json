@@ -1,0 +1,9 @@
+{
+  "id": "py-sort-key",
+  "kind": "coding",
+  "language": "python",
+  "prompt": "ranking.py has a bug: rank() should order players by score, highest first, but currently orders alphabetically by name. Fix it. Keep the function name.",
+  "verify": "python -m pytest -q",
+  "expected": "resolved",
+  "timeoutMs": 300000
+}

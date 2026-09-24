@@ -1,0 +1,9 @@
+{
+  "id": "py-factorial",
+  "kind": "coding",
+  "language": "python",
+  "prompt": "mathx.py has a bug: factorial(5) never terminates correctly. Fix it. Keep the function name.",
+  "verify": "python -m pytest -q",
+  "expected": "resolved",
+  "timeoutMs": 300000
+}

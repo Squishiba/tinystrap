@@ -1,0 +1,9 @@
+{
+  "id": "py-range-edge",
+  "kind": "coding",
+  "language": "python",
+  "prompt": "grid.py has a bug: sequence(3) should return [1, 2, 3] (1-indexed, inclusive) but returns [0, 1, 2]. Fix it. Keep the function name.",
+  "verify": "python -m pytest -q",
+  "expected": "resolved",
+  "timeoutMs": 300000
+}

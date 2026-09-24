@@ -1,0 +1,9 @@
+{
+  "id": "py-join-sep",
+  "kind": "coding",
+  "language": "python",
+  "prompt": "csvrow.py has a bug: row([\"a\",\"b\",\"c\"]) should return \"a, b, c\" (comma-space separated) but returns \"a,b,c\". Fix it. Keep the function name.",
+  "verify": "python -m pytest -q",
+  "expected": "resolved",
+  "timeoutMs": 300000
+}
