@@ -1,7 +1,8 @@
 import { createServer, type Server, type ServerResponse } from "node:http";
-import { makeEvent, effectSignature, effectsForHarnessTool, PIN_NOTE_TOOL, PIN_NOTE_TOOL_NAME } from "@tinystrap/policy";
-import type { HarnessEvent, ToolRegistry } from "@tinystrap/policy";
+import { makeEvent, effectSignature, effectsForHarnessTool, PIN_NOTE_TOOL, PIN_NOTE_TOOL_NAME, createIdentityDialect } from "@tinystrap/policy";
+import type { HarnessEvent, HostDialect, ToolRegistry } from "@tinystrap/policy";
 import type { Phase } from "@tinystrap/policy";
+import { seedRegistry, canonicalizeCalls } from "./seed.js";
 import { formatSse, SSE_DONE } from "./sse.js";
 import { StreamGate, type Preflight } from "./gate.js";
 import { interruptionChunks, interruptionSse } from "./rewrite.js";
@@ -25,6 +26,8 @@ export type ProxyDeps = {
   budgetTokens?: number;
   serverCaps?: Record<string, boolean> | null;
   phase?: () => Phase;
+  dialect?: HostDialect;   // default createIdentityDialect(); the supervisor constructs
+                           // createOpenCodeDialect(...) from tinystrap.toml [host] (later plan)
 };
 
 export async function startProxy(deps: ProxyDeps, port = 0) {
@@ -107,6 +110,10 @@ async function handle(
   if (feats.context_budgeting && deps.budgetTokens !== undefined) {
     chatReq = { ...chatReq, messages: truncateHistory(chatReq.messages, deps.budgetTokens) };
   }
+  // The request's own tools array is ground truth for what the host can execute
+  // (live-check F3 cause 1): seed the shared registry before the gate runs.
+  const dialect = deps.dialect ?? createIdentityDialect();
+  seedRegistry(deps.registry, chatReq.tools, dialect);
   const guidance = new GuidanceState({
     taskId,
     toolCardLimit: (selectProfile(chatReq.model) as { toolCardLimit?: number }).toolCardLimit ?? 3,
@@ -126,7 +133,7 @@ async function handle(
     chatReq = { ...chatReq, messages: withPinnedNotes(chatReq.messages, notes.renderPinned()) };
   }
   deps.onEvent?.(makeEvent(taskId, "tool_stream_started"));
-  const gate = new StreamGate({ registry: deps.registry, preflight: deps.preflight });
+  const gate = new StreamGate({ registry: deps.registry, preflight: deps.preflight, dialect });
   const loop = feats.reasoning_control
     ? new LoopDetector({
       taskId, scoreThreshold: 0.7, backstopTokens: 2048, midStreamClose: false,
@@ -177,7 +184,7 @@ async function handle(
   const flush = () => {
     baseFlush();
     if (!feats.guidance) return;
-    if (guidance.recordCalls(completedCalls())) {
+    if (guidance.recordCalls(canonicalizeCalls(dialect, completedCalls()))) {
       const level = guidance.escalate();
       deps.onEvent?.(makeEvent(taskId, "stall_escalated", { reason: `${level}:${guidance.stallCount()}` }));
       if (level === "stop") {
