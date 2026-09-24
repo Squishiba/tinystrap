@@ -1,7 +1,8 @@
 import { spawn } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { appendFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { HostRunner, HostTask, HostRunResult } from "@tinystrap/core";
+import { killProcessTree } from "@tinystrap/core";
 import { parsePiJsonl } from "./parse.js";
 
 export type PiRunnerOptions = {
@@ -19,6 +20,9 @@ export class PiRunner implements HostRunner {
     // its endpoint — env var is this task's first guess; a later operator-
     // gated live check (Task 9) confirms it against a real pi install.
     const transcriptPath = join(task.logsDir, "host-transcript.jsonl");
+    // Truncate up front, then append each stdout chunk as it arrives: a run
+    // killed mid-flight still leaves its partial transcript on disk.
+    writeFileSync(transcriptPath, "");
 
     return new Promise<HostRunResult>((resolve) => {
       const child = spawn(this.opts.bin ?? "pi",
@@ -27,41 +31,59 @@ export class PiRunner implements HostRunner {
           cwd: task.workspaceDir,
           stdio: ["ignore", "pipe", "pipe"],
           shell: false,
+          // POSIX: the child leads its own process group so killProcessTree
+          // can signal every process it spawned, not just the direct child.
+          detached: process.platform !== "win32",
           env: { ...process.env, OPENAI_BASE_URL: `${task.proxyBaseUrl.replace(/\/+$/, "")}/v1` },
         });
 
       let raw = "";
-      child.stdout.on("data", (d: Buffer) => { raw += d.toString(); });
+      child.stdout.on("data", (d: Buffer) => {
+        raw += d.toString();
+        appendFileSync(transcriptPath, d);
+      });
 
       let timedOut = false;
       let cancelled = false;
-      const killer = () => { timedOut = true; child.kill("SIGKILL"); };
-      const aborter = () => { cancelled = true; child.kill("SIGKILL"); };
-      const timer = setTimeout(killer, task.timeoutMs);
-      signal?.addEventListener("abort", aborter, { once: true });
-
-      child.on("error", () => { /* missing bin: resolve below with exitCode -1 */ });
-      child.on("close", (code) => {
+      let settled = false;
+      let fallback: NodeJS.Timeout | undefined;
+      const settle = (code: number | null) => {
+        if (settled) return;
+        settled = true;
         clearTimeout(timer);
+        if (fallback) clearTimeout(fallback);
         signal?.removeEventListener("abort", aborter);
-        writeFileSync(transcriptPath, raw);
         // The host writes each line followed by "\n", so raw.split("\n") ends
         // with a trailing empty string. parsePiJsonl maps blank lines to
         // a host_event, which would add a phantom event; drop empty lines here
         // while the transcript file itself stays byte-faithful to raw stdout.
         const lines = raw.split("\n").filter((l) => l.length > 0);
         resolve({
-          exitCode: code ?? -1,
+          exitCode: timedOut || cancelled || code === null ? -1 : code,
           events: parsePiJsonl(task.taskId, lines),
           transcriptPath,
           timedOut,
           cancelled,
         });
-      });
+      };
+
+      // Kill the whole tree, then stop waiting on `close`: an orphaned
+      // descendant holding the inherited stdout pipe would keep `close`
+      // from ever firing. Destroying the streams plus a short fallback
+      // timer bounds the settle even if the OS never closes the pipe.
+      const killAndArmFallback = () => {
+        killProcessTree(child.pid ?? -1); // -1 (no pid) is a safe no-op
+        try { child.stdout?.destroy(); child.stderr?.destroy(); } catch { /* already closed */ }
+        fallback = setTimeout(() => settle(-1), 1_500);
+        fallback.unref?.();
+      };
+      const killer = () => { timedOut = true; killAndArmFallback(); };
+      const aborter = () => { cancelled = true; killAndArmFallback(); };
+      const timer = setTimeout(killer, task.timeoutMs);
+      signal?.addEventListener("abort", aborter, { once: true });
+
+      child.on("error", () => { /* missing bin: resolve below with exitCode -1 */ });
+      child.on("close", (code) => settle(code));
     });
   }
 }
-
-// Windows note: child.kill("SIGKILL") kills the direct child only. If pi
-// spawns tool subprocesses that survive, a future fix would escalate to
-// `taskkill /F /T /PID <pid>` — not built here, just noted.
