@@ -1,7 +1,12 @@
 // Operator-gated: verifies the OpenCode adapter end-to-end against a REAL local
-// model server the operator already started. Usage:
-//   node scripts/live-host-check-opencode.mjs --base-url http://127.0.0.1:8080 --model qwen2.5-coder-7b
-// Prerequisite: run `pnpm typecheck` first (this project has no separate build step; typecheck's tsc -b emits dist/ as a side effect) so the relative dist/ imports below resolve.
+// model server the operator already started.
+// Usage (after `pnpm typecheck` to build dist/):
+//   node --conditions=tinystrap-dist scripts/live-host-check-opencode.mjs --base-url http://127.0.0.1:8080 --model qwen2.5-coder-7b
+// The relative dist/ imports below are required because scripts/ is not a
+// workspace member, so bare @tinystrap/* specifiers have no node_modules to
+// resolve from here; the --conditions=tinystrap-dist flag is what makes each
+// package's own internal cross-package imports resolve to its built dist/
+// output instead of raw TS source.
 // Never run from CI.
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
