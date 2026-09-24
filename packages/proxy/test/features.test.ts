@@ -7,10 +7,13 @@ const SPEC_7_NAMES: (keyof ProxyFeatures)[] = [
   "edit_assistance", "guidance", "pinned_notes",
 ];
 
+// Plan-level switches added by the host-dialects plan (not spec 7 mechanisms).
+const PLAN_FEATURES: (keyof ProxyFeatures)[] = ["interruption_feedback"];
+
 describe("ProxyFeatures", () => {
   it("declares all six spec-7 mechanisms, defaulted on", () => {
     for (const name of SPEC_7_NAMES) expect(DEFAULT_FEATURES[name]).toBe(true);
-    expect(Object.keys(DEFAULT_FEATURES).sort()).toEqual([...SPEC_7_NAMES].sort());
+    expect(Object.keys(DEFAULT_FEATURES).sort()).toEqual([...SPEC_7_NAMES, ...PLAN_FEATURES].sort());
   });
 
   it("marks exactly the mechanisms that have no server implementation", () => {
@@ -19,7 +22,7 @@ describe("ProxyFeatures", () => {
 
   it("covers every declared key with exactly one of the two lists", () => {
     for (const key of Object.keys(DEFAULT_FEATURES) as (keyof ProxyFeatures)[]) {
-      const declared = SPEC_7_NAMES.includes(key);
+      const declared = SPEC_7_NAMES.includes(key) || PLAN_FEATURES.includes(key);
       expect(declared).toBe(true);
       expect(UNIMPLEMENTED_FEATURES.includes(key)).toBe(false);
     }
