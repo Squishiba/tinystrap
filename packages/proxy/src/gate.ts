@@ -1,4 +1,5 @@
-import type { PolicyDecision, ToolRegistry } from "@tinystrap/policy";
+import { createIdentityDialect } from "@tinystrap/policy";
+import type { HostDialect, PolicyDecision, ToolRegistry } from "@tinystrap/policy";
 import type { StreamChunk, ToolCall } from "./types.js";
 
 export type Preflight = (tool: string, args: Record<string, unknown>) => PolicyDecision;
@@ -26,7 +27,13 @@ export class StreamGate {
   private parts = new Map<number, Partial>();
   private tripped: GateAction | undefined;
 
-  constructor(private readonly opts: { registry: ToolRegistry; preflight: Preflight }) {}
+  private readonly dialect: HostDialect;
+
+  constructor(private readonly opts: {
+    registry: ToolRegistry; preflight: Preflight; dialect?: HostDialect;
+  }) {
+    this.dialect = opts.dialect ?? createIdentityDialect();
+  }
 
   accumulated(): ToolCall[] {
     return [...this.parts.values()].filter((p) => p.name !== undefined).map((p) => ({
@@ -75,9 +82,15 @@ export class StreamGate {
     let parsed: Record<string, unknown> = {};
     try { parsed = JSON.parse(part.args) as Record<string, unknown>; }
     catch { parsed = { _raw: part.args }; }
-    const d = this.opts.preflight(part.name, parsed);
+    if (this.dialect.disposition(part.name) === "deny") {
+      return this.trip(
+        `host_denied: \`${part.name}\` is disabled by the host tool policy profile.`, part.name);
+    }
+    const d = this.opts.preflight(
+      this.dialect.canonicalName(part.name), this.dialect.toCanonicalArgs(part.name, parsed));
     if (d.effect === "rewrite") {
-      part.args = JSON.stringify(d.args);
+      part.args = JSON.stringify(
+        this.dialect.toHostArgs(part.name, d.args as Record<string, unknown>));
       return undefined;
     }
     if (d.effect === "deny" || d.effect === "ask") {
