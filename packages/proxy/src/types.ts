@@ -1,4 +1,4 @@
-import type { ToolDefinition } from "@tinystrap/policy";
+import type { WireTool } from "@tinystrap/policy";
 
 export type ChatRole = "system" | "user" | "assistant" | "tool";
 export type ChatMessage = {
@@ -20,7 +20,7 @@ export type ToolCallDelta = {
 export type ChatRequest = {
   model: string;
   messages: ChatMessage[];
-  tools?: ToolDefinition[];
+  tools?: WireTool[];
   tool_choice?: "auto" | "required" | "none";
   stream?: boolean;
   chat_template_kwargs?: Record<string, unknown>;
