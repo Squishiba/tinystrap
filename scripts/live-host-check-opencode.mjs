@@ -2,17 +2,19 @@
 // model server the operator already started.
 // Usage (after `pnpm typecheck` to build dist/):
 //   node --conditions=tinystrap-dist scripts/live-host-check-opencode.mjs --base-url http://127.0.0.1:8080 --model qwen2.5-coder-7b
+// From Git Bash on Windows, prefix with MSYS_NO_PATHCONV=1 if the --model value starts with a slash, otherwise Git Bash rewrites it into a Windows path.
 // The relative dist/ imports below are required because scripts/ is not a
 // workspace member, so bare @tinystrap/* specifiers have no node_modules to
 // resolve from here; the --conditions=tinystrap-dist flag is what makes each
 // package's own internal cross-package imports resolve to its built dist/
 // output instead of raw TS source.
 // Never run from CI.
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startProxy, HttpProvider } from "../packages/proxy/dist/index.js";
-import { createTask, extractPatch, destroyTask } from "../packages/core/dist/index.js";
+import { createTask, extractPatch, destroyTask, snapshotGit } from "../packages/core/dist/index.js";
 import { createToolRegistry, evaluate, ScriptLedger, EvasionTracker } from "../packages/policy/dist/index.js";
 import { OpenCodeRunner } from "../adapters/opencode/dist/index.js";
 
@@ -40,7 +42,18 @@ try { new URL(baseUrl); } catch {
 
 const projectRoot = mkdtempSync(join(tmpdir(), "live-host-"));
 writeFileSync(join(projectRoot, "hello.txt"), "wrld\n");
+// createTask() only creates the task directories; the workspace must be
+// populated by snapshotting the project, exactly as the supervisor flow does
+// (apps/cli/src/main.ts). snapshotGit() requires a real git project, so make
+// the temp project one (with inline -c identity args so no global git config
+// is touched) before snapshotting.
+execFileSync("git", ["init"], { cwd: projectRoot, stdio: "pipe" });
+execFileSync("git", ["add", "hello.txt"], { cwd: projectRoot, stdio: "pipe" });
+execFileSync("git",
+  ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-m", "init"],
+  { cwd: projectRoot, stdio: "pipe" });
 const handle = await createTask(projectRoot);
+await snapshotGit(projectRoot, handle);
 const registry = createToolRegistry();
 const ledger = new ScriptLedger();
 const evasion = new EvasionTracker();
@@ -65,6 +78,9 @@ await proxy.close();
 
 console.log({ exitCode: result.exitCode, timedOut: result.timedOut,
   cancelled: result.cancelled, transcript: result.transcriptPath });
-console.log("patch:\n" + (await extractPatch(handle)).slice(0, 2000));
+if (result.timedOut || result.cancelled) {
+  console.log("note: host was stopped by the runner's timeout/abort");
+}
+console.log("patch:\n" + (await extractPatch(handle)).slice(0, 4000));
 // Keep the task dir for inspection; print it instead of deleting:
 console.log("task dir:", handle.taskDir);
