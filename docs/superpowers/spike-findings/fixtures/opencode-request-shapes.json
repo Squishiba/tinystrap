@@ -1,0 +1,149 @@
+[
+  {
+    "url": "/v1/chat/completions",
+    "top_level_keys": [
+      "max_tokens",
+      "messages",
+      "model",
+      "stream",
+      "stream_options",
+      "tool_choice",
+      "tools"
+    ],
+    "model": "stub-model",
+    "stream": true,
+    "stream_options": {
+      "include_usage": true
+    },
+    "tool_choice": "auto",
+    "max_tokens": 32000,
+    "tool_count": 10,
+    "messages": [
+      {
+        "role": "system",
+        "content": "<opencode system prompt, 15885 chars, omitted>"
+      },
+      {
+        "role": "user",
+        "content": "\"Change hello.txt to contain exactly: hello world\""
+      }
+    ]
+  },
+  {
+    "url": "/v1/chat/completions",
+    "top_level_keys": [
+      "max_tokens",
+      "messages",
+      "model",
+      "stream",
+      "stream_options",
+      "tool_choice",
+      "tools"
+    ],
+    "model": "stub-model",
+    "stream": true,
+    "stream_options": {
+      "include_usage": true
+    },
+    "tool_choice": "auto",
+    "max_tokens": 32000,
+    "tool_count": 10,
+    "messages": [
+      {
+        "role": "system",
+        "content": "<opencode system prompt, 15885 chars, omitted>"
+      },
+      {
+        "role": "user",
+        "content": "\"Change hello.txt to contain exactly: hello world\""
+      },
+      {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [
+          {
+            "id": "call_0",
+            "type": "function",
+            "function": {
+              "name": "read",
+              "arguments": "{\"filePath\":\"C:/ws/task\\\\hello.txt\"}"
+            }
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "tool_call_id": "call_0",
+        "content": "<path>C:/ws/task\\hello.txt</path>\n<type>file</type>\n<content>\n1: wrld\n\n(End of file - total 1 lines)\n</content>"
+      }
+    ]
+  },
+  {
+    "url": "/v1/chat/completions",
+    "top_level_keys": [
+      "max_tokens",
+      "messages",
+      "model",
+      "stream",
+      "stream_options",
+      "tool_choice",
+      "tools"
+    ],
+    "model": "stub-model",
+    "stream": true,
+    "stream_options": {
+      "include_usage": true
+    },
+    "tool_choice": "auto",
+    "max_tokens": 32000,
+    "tool_count": 10,
+    "messages": [
+      {
+        "role": "system",
+        "content": "<opencode system prompt, 15885 chars, omitted>"
+      },
+      {
+        "role": "user",
+        "content": "\"Change hello.txt to contain exactly: hello world\""
+      },
+      {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [
+          {
+            "id": "call_0",
+            "type": "function",
+            "function": {
+              "name": "read",
+              "arguments": "{\"filePath\":\"C:/ws/task\\\\hello.txt\"}"
+            }
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "tool_call_id": "call_0",
+        "content": "<path>C:/ws/task\\hello.txt</path>\n<type>file</type>\n<content>\n1: wrld\n\n(End of file - total 1 lines)\n</content>"
+      },
+      {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [
+          {
+            "id": "call_1",
+            "type": "function",
+            "function": {
+              "name": "edit",
+              "arguments": "{\"filePath\":\"C:/ws/task\\\\hello.txt\",\"oldString\":\"wrld\",\"newString\":\"hello world\"}"
+            }
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "tool_call_id": "call_1",
+        "content": "Edit applied successfully."
+      }
+    ]
+  }
+]
