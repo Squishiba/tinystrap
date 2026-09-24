@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { createOpenCodeDialect, createToolRegistry } from "@tinystrap/policy";
+import type { PolicyDecision, WireTool } from "@tinystrap/policy";
 import type { StreamChunk } from "@tinystrap/proxy";
+import { seedRegistry, StreamGate } from "@tinystrap/proxy";
 import { gateForTest } from "./helpers.js";
 
 const chunk = (delta: StreamChunk["choices"][0]["delta"],
@@ -56,5 +59,54 @@ describe("stream gate", () => {
     const gate = gateForTest();
     expect(gate.push(chunk({ reasoning_content: "hmm" })).kind).toBe("forward");
     expect(gate.push(chunk({ content: "text" })).kind).toBe("forward");
+  });
+});
+
+function toolCallChunk(index: number, id: string, name: string, args: string): StreamChunk {
+  return { choices: [{ index: 0,
+    delta: { role: "assistant", tool_calls: [{ index, id, function: { name, arguments: args } }] },
+    finish_reason: null }] };
+}
+
+const opencodeTools: WireTool[] = [
+  { type: "function", function: { name: "edit", parameters: {} } },
+  { type: "function", function: { name: "webfetch", parameters: {} } },
+];
+
+function opencodeGate(decision: PolicyDecision, seen: Array<{ tool: string; args: Record<string, unknown> }>) {
+  const registry = createToolRegistry();
+  seedRegistry(registry, opencodeTools, createOpenCodeDialect());
+  return new StreamGate({ registry, dialect: createOpenCodeDialect(),
+    preflight: (tool, args) => { seen.push({ tool, args }); return decision; } });
+}
+
+describe("StreamGate with the OpenCode dialect", () => {
+  it("preflight sees canonical args, not filePath/oldString", () => {
+    const seen: Array<{ tool: string; args: Record<string, unknown> }> = [];
+    const gate = opencodeGate({ effect: "allow" }, seen);
+    gate.push(toolCallChunk(0, "call_1", "edit",
+      "{\"filePath\":\"/w/task/a.txt\",\"oldString\":\"wrld\",\"newString\":\"x\"}"));
+    expect(gate.push(toolCallChunk(0, "call_1", "", "}"))).toEqual(
+      expect.objectContaining({ kind: "forward" }));
+    expect(seen[0].args).toEqual({ path: "/w/task/a.txt", oldText: "wrld", newText: "x" });
+  });
+  it("a rewrite decision is mapped back to host argument names", () => {
+    const seen: Array<{ tool: string; args: Record<string, unknown> }> = [];
+    const gate = opencodeGate(
+      { effect: "rewrite", reason: "edit_assistance",
+        args: { path: "/w/task/a.txt", oldText: "wrld exact", newText: "x" } }, seen);
+    gate.push(toolCallChunk(0, "call_1", "edit", "{\"filePath\":\"/w/task/a.txt\""));
+    gate.push(toolCallChunk(0, "call_1", "", ",\"oldString\":\"wrld\",\"newString\":\"x\"}"));
+    const [call] = gate.accumulated();
+    expect(JSON.parse(call.function.arguments)).toEqual({
+      filePath: "/w/task/a.txt", oldString: "wrld exact", newString: "x" });
+  });
+  it("a denied disposition trips with host_denied before preflight runs", () => {
+    const seen: Array<{ tool: string; args: Record<string, unknown> }> = [];
+    const gate = opencodeGate({ effect: "allow" }, seen);
+    const action = gate.push(toolCallChunk(0, "call_9", "webfetch", "{\"url\":\"https://example.invalid\"}"));
+    expect(action.kind).toBe("interrupt");
+    expect((action as { reason: string }).reason).toContain("host_denied");
+    expect(seen.length).toBe(0);
   });
 });
