@@ -90,4 +90,28 @@ describe("parseOpenCodeJsonl", () => {
       ["host_event", "step_finish"],
     ]);
   });
+  it("maps non-object JSON lines to host_event unparsed without throwing", () => {
+    const lines = ["null", "123", '"x"', "[]", "true"];
+    const events = parseOpenCodeJsonl("t1", lines);
+    expect(events).toHaveLength(5);
+    for (const e of events) {
+      expect(e.kind).toBe("host_event");
+      expect(e.hostEventType).toBe("unparsed");
+    }
+  });
+  it("never drops or crashes on non-object JSON: line count equals event count for mixed input", () => {
+    const lines = [L({ type: "text", text: "hi" }), "null", "", "123", '"x"', "[]", "true", "{not json"];
+    const events = parseOpenCodeJsonl("t1", lines);
+    expect(events).toHaveLength(lines.length);
+    expect(events.map((e) => [e.kind, e.hostEventType])).toEqual([
+      ["host_event", "text"],
+      ["host_event", "unparsed"],
+      ["host_event", "blank"],
+      ["host_event", "unparsed"],
+      ["host_event", "unparsed"],
+      ["host_event", "unparsed"],
+      ["host_event", "unparsed"],
+      ["host_event", "unparsed"],
+    ]);
+  });
 });

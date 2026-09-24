@@ -17,7 +17,17 @@ export function parseOpenCodeJsonl(taskId: string, lines: string[]): HarnessEven
       continue;
     }
     let raw: Raw;
-    try { raw = JSON.parse(text) as Raw; }
+    try {
+      const parsed: unknown = JSON.parse(text);
+      // Non-object JSON (null, numbers, strings, booleans, arrays) is not a
+      // valid event: record it losslessly as unparsed rather than dereferencing
+      // it below.
+      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+        out.push(makeEvent(taskId, "host_event", { hostEventType: "unparsed" }));
+        continue;
+      }
+      raw = parsed as Raw;
+    }
     catch { out.push(makeEvent(taskId, "host_event", { hostEventType: "unparsed" })); continue; }
     // Real opencode events carry the tool name on the part (part.tool). The fake
     // host used by the runner tests still prints the OLD shape with a top-level
