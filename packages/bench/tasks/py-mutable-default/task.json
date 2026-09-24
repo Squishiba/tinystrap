@@ -1,0 +1,9 @@
+{
+  "id": "py-mutable-default",
+  "kind": "coding",
+  "language": "python",
+  "prompt": "basket.py has a bug: calling add() without a bag argument leaks items between unrelated calls. Fix it. Keep the function name and signature shape (item, bag=None allowed).",
+  "verify": "python -m pytest -q",
+  "expected": "resolved",
+  "timeoutMs": 300000
+}
