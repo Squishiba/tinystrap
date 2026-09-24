@@ -12,3 +12,5 @@ export * from "./evasion.js";
 export * from "./audit.js";
 export * from "./engine.js";
 export * from "./editassist.js";
+export * from "./dialect.js";
+export * from "./opencode-dialect.js";
