@@ -37,6 +37,8 @@ export class LoopDetector {
   private seenSentences = new Set<string>();
   private prevTurn = new Set<string>();
   private current = new Set<string>();
+  private nudges = 0;
+  private charsAtLastFire = Number.NEGATIVE_INFINITY;
   private last: LoopSignals = {
     repetition: 0, repeatedConclusion: 0, noveltyDecline: 0,
     noCommitment: 0, crossTurn: 0, verbatim: false,
@@ -45,8 +47,16 @@ export class LoopDetector {
   constructor(private readonly opts: {
     taskId: string; scoreThreshold: number; backstopTokens: number;
     midStreamClose: boolean;
-    onIntervention?: (action: LoopAction, signals: LoopSignals) => void;
+    // After a nudge, no further nudge fires until this many reasoning chars have
+    // been pushed (spec 12.6 ladder: one nudge per episode, not per delta).
+    nudgeCooldownChars?: number;
+    // Nudges per turn before the next qualifying trip escalates the ladder.
+    maxNudges?: number;
+    onIntervention?: (action: LoopAction, signals: LoopSignals, detail?: string) => void;
   }) {}
+
+  private get cooldownChars(): number { return this.opts.nudgeCooldownChars ?? 2000; }
+  private get nudgeCap(): number { return this.opts.maxNudges ?? 3; }
 
   signals(): LoopSignals { return this.last; }
 
@@ -55,6 +65,8 @@ export class LoopDetector {
     this.current = new Set();
     this.units = [];
     this.buf = "";
+    this.nudges = 0;
+    this.charsAtLastFire = Number.NEGATIVE_INFINITY;
   }
 
   push(delta: string): LoopAction {
@@ -96,16 +108,27 @@ export class LoopDetector {
 
     const score = Math.min(1, Math.max(repetition, noveltyDecline, crossTurn) +
       0.1 * (repeatedConclusion > 0 ? 1 : 0) + 0.1 * noCommitment);
-    if (score >= this.opts.scoreThreshold) {
-      if (this.opts.midStreamClose) return this.fire("close_reasoning", signals);
-      return this.fire("nudge", signals);
+    if (score < this.opts.scoreThreshold && !verbatim) return "none";
+
+    // A trip only acts once the cooldown since the last intervention elapsed;
+    // during cooldown the detector stays neutral (observe only).
+    if (this.totalChars - this.charsAtLastFire < this.cooldownChars) return "none";
+
+    // Ladder: nudge (up to maxNudges per turn) -> close_reasoning when the
+    // server supports mid-stream close, otherwise that rung is skipped and the
+    // next rung is the backstop (spec 12.6: where close is unsupported, the
+    // ladder stops nudging and the backstop remains).
+    if (this.nudges >= this.nudgeCap) {
+      const action: LoopAction = this.opts.midStreamClose ? "close_reasoning" : "backstop";
+      return this.fire(action, signals, `${action} after ${this.nudges} nudges`);
     }
-    if (verbatim) return this.fire("nudge", signals);
-    return "none";
+    this.nudges += 1;
+    return this.fire("nudge", signals, `nudge ${this.nudges}/${this.nudgeCap}`);
   }
 
-  private fire(action: LoopAction, signals: LoopSignals): LoopAction {
-    this.opts.onIntervention?.(action, signals);
+  private fire(action: LoopAction, signals: LoopSignals, detail?: string): LoopAction {
+    this.charsAtLastFire = this.totalChars;
+    this.opts.onIntervention?.(action, signals, detail);
     return action;
   }
 }

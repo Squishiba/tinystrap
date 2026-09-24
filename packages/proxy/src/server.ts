@@ -130,8 +130,8 @@ async function handle(
   const loop = feats.reasoning_control
     ? new LoopDetector({
       taskId, scoreThreshold: 0.7, backstopTokens: 2048, midStreamClose: false,
-      onIntervention: (action, signals) => deps.onEvent?.(makeEvent(
-        taskId, "reasoning_intervention", { reason: `${action} ${JSON.stringify(signals)}` })),
+      onIntervention: (action, signals, detail) => deps.onEvent?.(makeEvent(
+        taskId, "reasoning_intervention", { reason: `${detail ?? action} ${JSON.stringify(signals)}` })),
     })
     : undefined;
   const ac = new AbortController();

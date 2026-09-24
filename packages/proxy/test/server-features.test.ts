@@ -153,6 +153,41 @@ describe("proxy feature wiring", () => {
     expect(text).toContain("Pause: restate the next concrete step before continuing.");
   });
 
+  it("caps interventions on a flooded reasoning stream and ends cleanly through the backstop", async () => {
+    const events: HarnessEvent[] = [];
+    const delta = "going over the same ground again and again in circles here";
+    const chunks: StreamChunk[] =
+      Array.from({ length: 300 }, () => chunk({ reasoning_content: delta }));
+    chunks.push(chunk({}, "stop"));
+    const proxy = await runProxy({
+      provider: new FakeProvider(recorded(chunks)),
+      registry: registry(),
+      preflight: () => ({ effect: "allow" }),
+      onEvent: (e) => events.push(e),
+    });
+    const text = await post(proxy.url,
+      { model: "m", messages: [{ role: "user", content: "hi" }], stream: true });
+
+    const interventions = events.filter((e) => e.kind === "reasoning_intervention");
+    expect(interventions.length).toBeGreaterThan(0);
+    expect(interventions.length).toBeLessThanOrEqual(4); // maxNudges (3) + the escalation rung
+    const nudges = interventions.filter((e) => e.reason?.startsWith("nudge "));
+    expect(nudges.length).toBe(3);
+    expect(nudges[0]?.reason).toContain("nudge 1/3");
+    expect(interventions.at(-1)?.reason).toContain("backstop");
+
+    // one nudge text chunk per nudge event, no more
+    const records = parseSseRecords(text);
+    const nudgeChunks = records.filter((c) =>
+      c.choices[0]?.delta?.content
+        === "Pause: restate the next concrete step before continuing.").length;
+    expect(nudgeChunks).toBe(nudges.length);
+
+    // well-formed SSE ending cleanly through the backstop interruption
+    expect(text.endsWith("data: [DONE]\n\n")).toBe(true);
+    expect(records.at(-1)?.choices[0]?.finish_reason).toBe("tool_calls");
+  });
+
   it("stays silent on reasoning when reasoning_control is off", async () => {
     const events: HarnessEvent[] = [];
     const looped = "I will look at the file again to be sure.";
