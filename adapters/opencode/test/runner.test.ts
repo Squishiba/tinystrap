@@ -53,4 +53,60 @@ describe("OpenCodeRunner", () => {
     await fake().run(task);
     expect(existsSync(join(task.workspaceDir, "opencode.json"))).toBe(false);
   });
+
+  // Process-tree tests: the fake host spawns a grandchild that inherits stdout.
+  // Killing only the direct child leaves the grandchild holding the pipe, so
+  // `close` never fires and run() never resolves — these prove the whole tree
+  // dies and the run settles promptly with a partial (incremental) transcript.
+  const isDead = (pid: number): boolean => {
+    try { process.kill(pid, 0); return false; }
+    catch (e) { return (e as NodeJS.ErrnoException).code === "ESRCH"; }
+  };
+  const waitForDead = async (pid: number, timeoutMs: number): Promise<boolean> => {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (isDead(pid)) return true;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    return isDead(pid);
+  };
+  const trackedPids: number[] = [];
+  afterEach(async () => {
+    for (const pid of trackedPids.splice(0)) {
+      try { process.kill(pid, "SIGKILL"); } catch { /* already dead */ }
+    }
+  });
+  const grandchildPid = (transcriptPath: string): number => {
+    const line = readFileSync(transcriptPath, "utf8").trim().split("\n")
+      .map((l) => JSON.parse(l)).find((o) => o.type === "grandchild");
+    expect(line, "transcript must contain the grandchild line printed before the kill").toBeTruthy();
+    trackedPids.push(line.pid);
+    return line.pid;
+  };
+
+  it("kills the whole process tree on timeout and settles promptly with a partial transcript", async () => {
+    const start = Date.now();
+    const r = await fake(["--grandchild"]).run(mkTask({ timeoutMs: 600 }));
+    expect(Date.now() - start, "run() must settle within ~5 s of the kill").toBeLessThan(5_000);
+    expect(r.timedOut).toBe(true);
+    expect(r.cancelled).toBe(false);
+    expect(r.exitCode).toBe(-1);
+    expect(existsSync(r.transcriptPath)).toBe(true);
+    const gcPid = grandchildPid(r.transcriptPath);
+    expect(await waitForDead(gcPid, 3_000), `grandchild ${gcPid} survived the timeout kill`).toBe(true);
+  }, 15_000);
+
+  it("kills the whole process tree on AbortSignal and settles promptly", async () => {
+    const ac = new AbortController();
+    const start = Date.now();
+    const p = fake(["--grandchild"]).run(mkTask({ timeoutMs: 30_000 }), ac.signal);
+    setTimeout(() => ac.abort(), 300);
+    const r = await p;
+    expect(Date.now() - start, "run() must settle within ~5 s of the abort").toBeLessThan(5_000);
+    expect(r.cancelled).toBe(true);
+    expect(r.timedOut).toBe(false);
+    expect(r.exitCode).toBe(-1);
+    const gcPid = grandchildPid(r.transcriptPath);
+    expect(await waitForDead(gcPid, 3_000), `grandchild ${gcPid} survived the abort kill`).toBe(true);
+  }, 15_000);
 });
