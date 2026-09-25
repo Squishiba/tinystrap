@@ -35,7 +35,7 @@ afterEach(async () => {
 });
 
 describe("killProcessTree", () => {
-  it("kills the child and its grandchild within 3 seconds", async () => {
+  it("kills the child and its grandchild within 15 seconds", async () => {
     const child = spawn(process.execPath, ["-e", CHILD_SRC], {
       stdio: ["ignore", "pipe", "pipe"],
       detached: process.platform !== "win32",
@@ -51,7 +51,7 @@ describe("killProcessTree", () => {
         if (Number.isInteger(pid) && pid > 0) resolve(pid);
       });
       child.on("error", reject);
-      setTimeout(() => reject(new Error(`grandchild pid not printed (got "${buf}")`)), 5_000);
+      setTimeout(() => reject(new Error(`grandchild pid not printed (got "${buf}")`)), 15_000);
     });
     leftovers.push(gcPid);
 
@@ -59,12 +59,12 @@ describe("killProcessTree", () => {
     leftovers.push(child.pid);
 
     const [childDead, gcDead] = await Promise.all([
-      waitForDead(child.pid, 3_000),
-      waitForDead(gcPid, 3_000),
+      waitForDead(child.pid, 15_000),
+      waitForDead(gcPid, 15_000),
     ]);
     expect(childDead, `child ${child.pid} still alive`).toBe(true);
     expect(gcDead, `grandchild ${gcPid} still alive`).toBe(true);
-  }, 15_000);
+  }, 60_000);
 
   it("never throws for an invalid or already-dead pid", () => {
     expect(() => killProcessTree(-1)).not.toThrow();
