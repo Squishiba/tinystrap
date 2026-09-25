@@ -3,6 +3,7 @@ import { makeEvent, effectSignature, effectsForHarnessTool, PIN_NOTE_TOOL, PIN_N
 import type { HarnessEvent, HostDialect, ToolRegistry } from "@tinystrap/policy";
 import type { Phase } from "@tinystrap/policy";
 import { seedRegistry, canonicalizeCalls } from "./seed.js";
+import { compileForwardedTools } from "./wire.js";
 import { formatSse, SSE_DONE } from "./sse.js";
 import { StreamGate, type Preflight } from "./gate.js";
 import { interruptionChunks, interruptionSse, interruptionContentSse } from "./rewrite.js";
@@ -29,6 +30,7 @@ export type ProxyDeps = {
   phase?: () => Phase;
   dialect?: HostDialect;   // default createIdentityDialect(); the supervisor constructs
                            // createOpenCodeDialect(...) from tinystrap.toml [host] (later plan)
+  phaseAllowlists?: Partial<Record<Phase, readonly string[]>>;   // same shape as PolicyContext's
 };
 
 export async function startProxy(deps: ProxyDeps, port = 0) {
@@ -143,6 +145,17 @@ async function handle(
   if (feats.pinned_notes) {
     if (!deps.registry.lookup(PIN_NOTE_TOOL_NAME)) deps.registry.register(PIN_NOTE_TOOL);
     chatReq = { ...chatReq, messages: withPinnedNotes(chatReq.messages, notes.renderPinned()) };
+  }
+  // Spec 9.6/11: the model is offered exactly the tools it may use — phase-allowed,
+  // disposition-allowed, plus harness-owned pin_note (gap 1: on main the model
+  // never sees harness tools at all). Only rewrite when the host sent a tools
+  // array; a tools-less request stays tools-less.
+  if (chatReq.tools !== undefined) {
+    chatReq = { ...chatReq, tools: compileForwardedTools({
+      registry: deps.registry, phase: deps.phase?.() ?? "planning",
+      phaseAllowlists: deps.phaseAllowlists, dialect,
+      extraTools: feats.pinned_notes ? [PIN_NOTE_TOOL] : [],
+    }) };
   }
   deps.onEvent?.(makeEvent(taskId, "tool_stream_started"));
   const gate = new StreamGate({ registry: deps.registry, preflight: deps.preflight, dialect });
