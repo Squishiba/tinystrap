@@ -31,9 +31,10 @@ type Unit = { text: string; dup: boolean };
 
 export class LoopDetector {
   private buf = "";
+  private unitBuf = "";
   private totalChars = 0;
   private units: Unit[] = [];
-  private seen = new Set<string>();
+  private unitCounts = new Map<string, number>();
   private seenSentences = new Set<string>();
   private prevTurn = new Set<string>();
   private current = new Set<string>();
@@ -52,11 +53,20 @@ export class LoopDetector {
     nudgeCooldownChars?: number;
     // Nudges per turn before the next qualifying trip escalates the ladder.
     maxNudges?: number;
+    // Detection units are completed sentences/lines accumulated from deltas;
+    // normalized units shorter than this are ignored (spec 12.6 measures
+    // repetition over reasoning content, not over sub-word stream tokens).
+    minUnitChars?: number;
+    // A repeated unit only trips the verbatim rung once it has occurred this
+    // many times in the turn.
+    verbatimRepeats?: number;
     onIntervention?: (action: LoopAction, signals: LoopSignals, detail?: string) => void;
   }) {}
 
   private get cooldownChars(): number { return this.opts.nudgeCooldownChars ?? 2000; }
   private get nudgeCap(): number { return this.opts.maxNudges ?? 3; }
+  private get minUnit(): number { return this.opts.minUnitChars ?? 24; }
+  private get verbatimRepeatsRequired(): number { return this.opts.verbatimRepeats ?? 3; }
 
   signals(): LoopSignals { return this.last; }
 
@@ -64,25 +74,56 @@ export class LoopDetector {
     this.prevTurn = new Set([...this.prevTurn, ...this.current]);
     this.current = new Set();
     this.units = [];
+    this.unitCounts = new Map();
     this.buf = "";
+    this.unitBuf = "";
     this.nudges = 0;
     this.charsAtLastFire = Number.NEGATIVE_INFINITY;
   }
 
+  // Cut completed sentences/lines (terminated by sentence punctuation or a
+  // newline) out of the delta accumulator; fragments shorter than minUnitChars
+  // are dropped so sub-word tokens and filler can never become detection units.
+  private formUnits(): string[] {
+    const formed: string[] = [];
+    let start = 0;
+    for (let i = 0; i < this.unitBuf.length; i++) {
+      const ch = this.unitBuf[i];
+      if (ch === "." || ch === "!" || ch === "?" || ch === "\n") {
+        const text = normalize(this.unitBuf.slice(start, i + 1));
+        if (text.length >= this.minUnit) formed.push(text);
+        start = i + 1;
+      }
+    }
+    this.unitBuf = this.unitBuf.slice(start);
+    return formed;
+  }
+
   push(delta: string): LoopAction {
     this.buf += delta;
+    this.unitBuf += delta;
     this.totalChars += delta.length;
 
-    const unit = normalize(delta);
-    let verbatim = this.last.verbatim;
-    if (unit !== "") {
-      const exact = this.seen.has(unit);
-      if (exact) verbatim = true;
-      const dup = exact || this.units.some((u) => nearDuplicate(u.text, unit));
-      this.seen.add(unit);
-      this.current.add(unit);
-      this.units.push({ text: unit, dup });
+    for (const text of this.formUnits()) {
+      this.unitCounts.set(text, (this.unitCounts.get(text) ?? 0) + 1);
+      const dup = (this.unitCounts.get(text) ?? 0) > 1 ||
+        this.units.some((u) => nearDuplicate(u.text, text));
+      this.current.add(text);
+      this.units.push({ text, dup });
       if (this.units.length > 20) this.units.shift();
+    }
+
+    // Verbatim reflects the current window only: an exact repeat of a unit
+    // among the last 20 units. It is decisive on its own only once the unit
+    // has occurred verbatimRepeats times in the turn.
+    const windowCounts = new Map<string, number>();
+    for (const u of this.units) windowCounts.set(u.text, (windowCounts.get(u.text) ?? 0) + 1);
+    let verbatim = false;
+    let verbatimTrip = false;
+    for (const [text, n] of windowCounts) {
+      if (n < 2) continue;
+      verbatim = true;
+      if ((this.unitCounts.get(text) ?? 0) >= this.verbatimRepeatsRequired) verbatimTrip = true;
     }
 
     const sents = sentences(this.buf);
@@ -108,7 +149,7 @@ export class LoopDetector {
 
     const score = Math.min(1, Math.max(repetition, noveltyDecline, crossTurn) +
       0.1 * (repeatedConclusion > 0 ? 1 : 0) + 0.1 * noCommitment);
-    if (score < this.opts.scoreThreshold && !verbatim) return "none";
+    if (score < this.opts.scoreThreshold && !verbatimTrip) return "none";
 
     // A trip only acts once the cooldown since the last intervention elapsed;
     // during cooldown the detector stays neutral (observe only).

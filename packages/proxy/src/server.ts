@@ -60,8 +60,10 @@ export async function startProxy(deps: ProxyDeps, port = 0) {
 
 const NUDGE_TEXT = "Pause: restate the next concrete step before continuing.";
 
+// The nudge rides the reasoning_content channel (the same field the model's
+// reasoning arrives on) so it never lands in the host's visible answer text.
 function nudgeChunk(): StreamChunk {
-  return { choices: [{ index: 0, delta: { role: "assistant", content: NUDGE_TEXT }, finish_reason: null }] };
+  return { choices: [{ index: 0, delta: { role: "assistant", reasoning_content: NUDGE_TEXT }, finish_reason: null }] };
 }
 
 function jsonDocuments(s: string): string[] {
