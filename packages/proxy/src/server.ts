@@ -35,6 +35,12 @@ export type ProxyDeps = {
   // counted per client request, default 3. When exhausted (or when a retry
   // request itself fails) the proxy falls back to the interruption behaviour.
   maxInterruptRetries?: number;
+  // Cap on in-stream retries of all-pin_note turns (pin_note is a harness tool
+  // the host never implements, so the turn is re-run instead of ending the
+  // agent run); counted per client request, default 5, sharing the retry
+  // bookkeeping with interruption_retry. When exhausted (or when the retry
+  // request itself fails) the proxy falls back to the synthetic turn.
+  maxPinNoteTurns?: number;
 };
 
 export async function startProxy(deps: ProxyDeps, port = 0) {
@@ -111,6 +117,7 @@ async function handle(
   }
   const feats = { ...DEFAULT_FEATURES, ...deps.features };
   const maxInterruptRetries = deps.maxInterruptRetries ?? 3;
+  const maxPinNoteTurns = deps.maxPinNoteTurns ?? 5; // needs > 0 for the pin retry to fire
   const taskId = deps.taskId ?? "proxy";
   if (feats.reasoning_control) {
     const kw = thinkingForRequest(chatReq.model, deps.serverCaps ?? null, deps.phase?.() ?? "planning");
@@ -180,11 +187,18 @@ async function handle(
   // backstops abort the stream currently being read, and the retry path swaps
   // in a fresh controller per attempt (an aborted signal must never be re-used).
   let currentAc = ac;
-  // Retry bookkeeping (interruption_retry): `retried` also distinguishes a retry
-  // request failure (content interruption fallback) from a first-stream failure
-  // (clean close, current behaviour).
+  // Retry bookkeeping, shared by interruption_retry and the pin_note turn
+  // retry: `retried`/`pinRetried` also distinguish a retry-request failure
+  // (fallback interruption / synthetic pin turn) from a first-stream failure
+  // (clean close, current behaviour); `lastPinMessage` feeds the synthetic
+  // pin_note fallback text.
   let retried = false;
-  const retryState = { used: 0, lastReason: "" };
+  let pinRetried = false;
+  let lastPinMessage = "";
+  // Re-arms the provider-retry loop from flushStream (function-scoped so the
+  // closure can flip it; the loop body resets it to false per attempt).
+  let streamAgain = true;
+  const retryState = { used: 0, pinUsed: 0, lastReason: "" };
   res.writeHead(200, { "content-type": "text/event-stream" });
   // Tool-call fragments are held back until the gate has cleared the call
   // (spec 10.2: the host never sees a truncated fragment if we interrupt).
@@ -244,14 +258,21 @@ async function handle(
   };
   let assistantText = "";
   // Intercept pin_note calls at the flush point: apply them to the note store,
-  // emit the audit event, and — when every accumulated call is pin_note —
-  // replace the raw stream with a well-formed synthetic turn the host can
-  // interpret (it does not implement pin_note). Known v1 limitation (documented):
-  // mixed pin_note + other-tool calls apply and log the notes but forward the
-  // raw stream unchanged; full tool-result plumbing is a later supervisor-plan
-  // item.
-  const flushStream = (): boolean => {
-    if (!feats.pinned_notes) { flush(); return false; }
+  // emit the audit event, and — when every accumulated call is pin_note — keep
+  // the host's agent run alive by discarding the buffered call and re-calling
+  // the provider in the same client SSE stream with the pin call (synthetic
+  // tool_call_id) plus a role-"tool" result message (same in-stream mechanism
+  // as interruption_retry). The retries share that retry bookkeeping and are
+  // bounded by maxPinNoteTurns; when the bound is exhausted, or the retry
+  // request fails (allowRetry false from the catch / tail paths), the proxy
+  // falls back to the well-formed synthetic turn the host can interpret.
+  // Known v1 limitation (documented): mixed pin_note + other-tool calls apply
+  // and log the notes but forward the raw stream unchanged — re-running a mixed
+  // turn through the tool-message mechanism would discard the host's real tool
+  // call, so it is left alone until the supervisor plan lands tool-result
+  // plumbing for pin_note with real tools.
+  const flushStream = (allowRetry: boolean): "done" | "retry" | "none" => {
+    if (!feats.pinned_notes) { flush(); return "none"; }
     const calls = gate.accumulated();
     const pinCalls = calls.filter((c) => c.function.name === PIN_NOTE_TOOL_NAME);
     let lastMessage = "";
@@ -268,23 +289,54 @@ async function handle(
       }));
     }
     if (pinCalls.length > 0 && pinCalls.length === calls.length) {
+      lastPinMessage = lastMessage;
+      if (allowRetry && retryState.pinUsed < maxPinNoteTurns) {
+        retryState.pinUsed += 1;
+        pinRetried = true;
+        const id = `call_pin_${retryState.pinUsed}_${Date.now().toString(36)}`;
+        const attempted = calls[0];
+        const assistantMsg: ChatMessage = {
+          role: "assistant",
+          content: null,
+          tool_calls: [{
+            id, type: "function",
+            function: { name: attempted.function.name, arguments: attempted.function.arguments || "{}" },
+          }],
+        };
+        const toolMsg: ChatMessage = {
+          role: "tool",
+          tool_call_id: id,
+          content: `pin_note: ${lastMessage}`,
+        };
+        chatReq = { ...chatReq, messages: [...chatReq.messages, assistantMsg, toolMsg] };
+        // Discard the pin call's buffered fragments; a fresh gate and controller
+        // arm the next attempt.
+        pending.length = 0;
+        repairedOnce = false;
+        gate = new StreamGate({ registry: deps.registry, preflight: deps.preflight, dialect });
+        currentAc.abort();
+        currentAc = new AbortController();
+        streamAgain = true;
+        return "retry";
+      }
+      // Bound exhausted (or retry not allowed here): the synthetic turn, as before.
       pending.length = 0;
       res.write(interruptionChunks(chatReq, `pin_note: ${lastMessage}`)
         .map(formatSse).join("") + SSE_DONE);
       res.end();
-      return true;
+      return "done";
     }
     flush();
-    return false;
+    return "none";
   };
   try {
-    // Retry loop (interruption_retry): a gate denial aborts nothing for the
-    // host — the buffered call is discarded and the provider is called again
-    // with the attempted tool call plus a role-"tool" correction message, and
-    // that response continues the same client SSE stream. Bounded per request
-    // by maxInterruptRetries; on exhaustion or a failed retry request the proxy
-    // falls back to the interruption behaviour exactly as before.
-    let streamAgain = true;
+    // Retry loop: a gate denial aborts nothing for the host — the buffered call
+    // is discarded and the provider is called again with the attempted tool call
+    // plus a role-"tool" correction message, and that response continues the
+    // same client SSE stream. Bounded per request by maxInterruptRetries; on
+    // exhaustion or a failed retry request the proxy falls back to the
+    // interruption behaviour exactly as before. All-pin_note turns use the same
+    // loop (flushStream re-arms it) with their own maxPinNoteTurns bound.
     while (streamAgain) {
       streamAgain = false;
       for await (const chunk of deps.provider.stream(chatReq, currentAc.signal)) {
@@ -363,7 +415,14 @@ async function handle(
           }
         }
         assistantText += choice?.delta.content ?? "";
-        if (choice?.finish_reason) { if (flushStream()) return; if (stopRequested) return; }
+        if (choice?.finish_reason) {
+          const fs = flushStream(true);
+          if (fs === "done") return;
+          // An all-pin_note turn was re-armed: re-enter the retry loop so the
+          // provider is called again with the pin call plus its result message.
+          if (fs === "retry") break;
+          if (stopRequested) return;
+        }
         if (choice?.delta.tool_calls?.length) pending.push(chunk);
         else res.write(formatSse(chunk));
       }
@@ -373,13 +432,24 @@ async function handle(
       guidance.submitPlan(items);
       deps.onEvent?.(makeEvent(taskId, "guidance_updated", { reason: `plan:${items.length}` }));
     }
-    if (flushStream()) return;
+    // Stream ended without a finish chunk: keep the pre-existing fallback here
+    // (no retry — an unfinished turn is not a pin_note completion).
+    if (flushStream(false) === "done") return;
     if (stopRequested) return;
     res.write(SSE_DONE);
     res.end();
   } catch {
-    if (flushStream()) return;
+    if (flushStream(false) === "done") return;
     if (stopRequested) return;
+    if (pinRetried) {
+      // A pin_note retry request failed: fall back to the synthetic turn for
+      // the note that was applied before the retry was attempted. Checked
+      // before `retried` because a pin retry is always the most recent action.
+      res.write(interruptionChunks(chatReq, `pin_note: ${lastPinMessage}`)
+        .map(formatSse).join("") + SSE_DONE);
+      res.end();
+      return;
+    }
     if (retried) {
       // A retry upstream request failed mid-stream: the model never saw the
       // response, so deliver the correction the same way main does (content
