@@ -159,9 +159,62 @@ run and scrubbed.
 
 | Finding | Follow-up |
 | ------- | --------- |
-| F1 | Fix the live-check script (snapshot step). |
-| F2 | Process-tree kill, settle-after-kill, incremental transcript in both runners. |
-| F3 | Plan and build host tool dialects and registry seeding. |
-| F4 | Nudge cooldown and escalation in the loop detector, with a regression test. |
-| F5 | Update the OpenCode parser to the real event shapes; use the fixtures. |
+| F1 | Fixed in #28 (live-check script snapshot step). |
+| F2 | Fixed in #31 (process-tree kill, settle-after-kill, incremental transcript in both runners). |
+| F3 | Fixed in #34-#37 plus #38 (tool dialects and registry seeding). |
+| F4 | Fixed in #32 and #40 (nudge cooldown and escalation, with a regression test). |
+| F5 | Fixed in #30 (parser on the real event shapes; uses the fixtures). |
 | Open questions 1 and 2 | Investigate after the above; re-run the live check once F1 to F5 are fixed. |
+
+## 7. Re-run results after the F1-F5 fixes (2026-09-25)
+
+Re-run of the live check once the F1-F5 fixes had landed, using the same task as before.
+Setup: a fresh clone of `main`, the real `opencode` binary (1.18.25) headless through the
+tinystrap proxy to a local Qwen reasoning model served by a local llama.cpp server. The
+live-check script now runs with the OpenCode dialect (F3) and prints full audit events (F5).
+
+### Run 1 (main `dbb52cf`)
+
+No hang this time. The run finished in about 30 s, the transcript was written incrementally,
+and `reasoning_intervention` fired 3 times (was 777). `bash` and `read` executed through the
+request-seeded registry (F3). A third `bash` call was denied by the shell analyzer as
+`argument_denied: unclassifiable shell command (fail closed)`. The denial text was delivered
+as assistant CONTENT with finish reason `stop`, so OpenCode ended the run with an empty
+patch.
+
+**G1. Content-based interruption terminates the host loop.** Surfacing an interruption as
+model content ends the run outright: the host treats it as a normal assistant turn and
+stops. Candidate fix: a proxy-side retry with the correction appended instead of surfacing
+it. The denied command itself was not captured, because the script only printed event kinds.
+
+### Run 2 (after PR #39)
+
+With the richer event detail from #39, the run completed the task with a real patch
+(`hello.txt` changed `wrld` to `hello world`) in 5 model turns using `glob`, `bash`, `read`,
+`write`, `bash`. But `reasoning_intervention` fired on every turn with tiny signal scores
+(`repetition`/`noveltyDecline` 0.05-0.17) and `verbatim=true`, and the nudge text "Pause:
+restate the next concrete step before continuing." leaked into the visible assistant content
+of each turn.
+
+**G2. The loop detector treated raw sub-word deltas as units and `verbatim` was sticky.**
+Fixed in PR #40 (sentence units, a minimum unit length, non-sticky `verbatim`, and the nudge
+moved to `reasoning_content`).
+
+### Run 3 (main after #40)
+
+Zero `reasoning_intervention` events across 5 model turns, a real patch again, one
+`guidance_updated` (plan) event, and no denials.
+
+### Caveats
+
+- Three runs on one trivial task with one model is not validation.
+- Model output is non-deterministic, so G1 (a denied call ends the run) can still recur and
+  is open.
+- Still unverified: the `close_reasoning` rung, mid-stream forced reasoning close, and
+  OpenCode's behaviour for an unknown tool (probe script
+  `scripts/probe-opencode-unknown-tool.mjs`, operator-run).
+- Loop thresholds are still unvalidated on genuinely looping real reasoning.
+- A Windows-only CI flake in the runner transcript tests was seen once (being investigated
+  separately).
+- New open items: the G1 fix design decision; the dialect for `pi` is still deferred (its
+  argument names are unverified).
