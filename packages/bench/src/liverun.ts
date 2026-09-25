@@ -17,20 +17,22 @@
 // ever exercised by an operator against their own server, never by CI.
 
 import { execFileSync } from "node:child_process";
-import { cpSync, existsSync, mkdtempSync, rmSync } from "node:fs";
+import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createTask, destroyTask, extractPatch, snapshotGit } from "@tinystrap/core";
 import type { HostRunner, TaskHandle } from "@tinystrap/core";
+import { createToolRegistry } from "@tinystrap/policy";
 import type { HostDialect } from "@tinystrap/policy";
 import type { HarnessEvent } from "@tinystrap/policy";
 import { startProxy } from "@tinystrap/proxy";
 import type { Provider, ProxyFeatures } from "@tinystrap/proxy";
 import type { BenchTask } from "./taskfile.js";
 import type { BenchRunResult } from "./runner.js";
+import type { VerifyResult } from "./verify.js";
 import { verifyInFreshCopy } from "./verify.js";
-import { makeBenchRegistry, makePreflight } from "./policywire.js";
+import { makePreflight } from "./policywire.js";
 import { collectMetrics } from "./metrics.js";
 import type { BenchMetrics } from "./metrics.js";
 
@@ -43,6 +45,12 @@ export type LiveRunOptions = {
   config?: string;
   tasksRoot?: string;
   timeoutMs?: number; // overrides task.timeoutMs (the --timeout-ms flag)
+  // Operator-local debug artifacts: when set, every run writes raw
+  // diagnostics into <debugDir>/<task>-<config>/ (host transcript and stderr,
+  // proxy audit events, verify output tail, extracted patch, workspace
+  // listing). These contain machine-local paths and raw model output and
+  // must NEVER be committed. Default undefined keeps results sanitized.
+  debugDir?: string;
 };
 
 const DEFAULT_TASKS_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "tasks");
@@ -81,7 +89,16 @@ export async function runLiveTask(
     handle = await createTask(projectDir);
     await snapshotGit(projectDir, handle);
 
-    const registry = makeBenchRegistry();
+    // The registry starts EMPTY on purpose for live runs: the proxy seeds it
+    // per request from the host's own `tools` array (seedRegistry), which is
+    // ground truth for what the host can execute. makeBenchRegistry's extra
+    // canonical tools (python, run, delete, apply_patch) would be forwarded
+    // to the model as tools a real host like OpenCode does not implement — a
+    // model call to one of those phantoms reaches the host as an unrunnable
+    // tool call (prime suspect for the live host exitCode 1 failures).
+    // Safety scenarios keep makeBenchRegistry: their recorded streams must
+    // reach the engine's real checks for the canonical vocabulary.
+    const registry = createToolRegistry();
     proxy = await startProxy({
       provider: opts.provider,
       registry,
@@ -119,6 +136,19 @@ export async function runLiveTask(
 
     const metrics = collectMetrics(events, Date.now() - t0);
 
+    if (opts.debugDir) {
+      try {
+        writeLiveDebugArtifacts(opts.debugDir, task, config, {
+          logsDir: handle.logsDir,
+          workspaceDir: handle.workspaceDir,
+          events, patch, verify,
+        });
+      } catch (err) {
+        // Debug artifacts must never sink the run itself.
+        console.error(`debug artifacts failed (${task.id}/${config}): ${String(err)}`);
+      }
+    }
+
     return {
       taskId: task.id,
       config,
@@ -134,11 +164,85 @@ export async function runLiveTask(
   }
 }
 
+// ── raw per-run debug artifacts (operator-local, never committed) ───────────
+
+function listTree(dir: string, prefix = ""): string[] {
+  const out: string[] = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })
+    .sort((a, b) => a.name.localeCompare(b.name))) {
+    const rel = prefix === "" ? entry.name : `${prefix}/${entry.name}`;
+    if (entry.isDirectory()) {
+      out.push(`${rel}/`);
+      out.push(...listTree(join(dir, entry.name), rel));
+    } else out.push(rel);
+  }
+  return out;
+}
+
+// Raw, unsanitized per-run diagnostics for the operator's machine only.
+// Everything here can contain local paths and raw model output; it is the
+// counterpart to sanitizeRunResult, never a replacement for it.
+export function writeLiveDebugArtifacts(
+  debugDir: string,
+  task: BenchTask,
+  config: string,
+  data: {
+    logsDir: string;
+    workspaceDir: string;
+    events: HarnessEvent[];
+    patch: string;
+    verify: VerifyResult | null;
+  },
+): string {
+  const dir = join(debugDir, `${task.id}-${config}`);
+  mkdirSync(dir, { recursive: true });
+  // host-transcript.jsonl and (runner-provided) host-stderr.log live in the
+  // task logs dir; copy every file there so a killed run's partial output survives.
+  if (existsSync(data.logsDir)) {
+    for (const f of readdirSync(data.logsDir)) {
+      const src = join(data.logsDir, f);
+      if (statSync(src).isFile()) copyFileSync(src, join(dir, f));
+    }
+  }
+  writeFileSync(join(dir, "proxy-events.jsonl"),
+    data.events.map((e) => JSON.stringify(e)).join("\n") +
+    (data.events.length > 0 ? "\n" : ""));
+  writeFileSync(join(dir, "patch.diff"), data.patch);
+  writeFileSync(join(dir, "verify-output.txt"), data.verify?.outputTail ?? "");
+  writeFileSync(join(dir, "workspace-listing.txt"),
+    listTree(data.workspaceDir).join("\n") + "\n");
+  return dir;
+}
+
 // ── argument parsing (pure, offline-testable) ────────────────────────────────
 
 export const BENCH_LIVE_USAGE =
   "usage: bench-live.mjs --base-url <url> --model <id> [--tasks a,b] [--configs full] " +
-  "[--repeat n] [--timeout-ms n] [--out dir] [--label name] [--list]";
+  "[--repeat n] [--timeout-ms n] [--out dir] [--debug-dir dir] [--label name] [--list]\n" +
+  "--debug-dir: write raw per-run artifacts (host transcript + stderr, proxy audit " +
+  "events, verify output tail, extracted patch, workspace listing) into " +
+  "<dir>/<task>-<config>/ for local diagnosis. Operator-local ONLY: these files " +
+  "contain machine-local paths and raw model output and must never be committed.";
+
+// Git Bash on Windows rewrites absolute POSIX-looking args, and Node on win32
+// resolves "/c/dir" against the CURRENT drive, creating C:\c\dir. Reject the
+// MSYS shape with a clear message instead of silently writing to the wrong
+// place; everything else is anchored to the cwd with path.resolve.
+const MSYS_STYLE_PATH = /^\/[a-z](\/|$)/i;
+
+export function resolveOperatorPath(
+  raw: string,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  if (platform === "win32" && MSYS_STYLE_PATH.test(raw)) {
+    throw new Error(
+      `MSYS-style path "${raw}" is not usable on Windows (it would resolve to the ` +
+      "current drive plus a literal /c/... tree). Pass a Windows-style path such as " +
+      "D:\\bench-out or a path relative to the current directory.",
+    );
+  }
+  return resolve(raw);
+}
 
 export const BENCH_LIVE_DEFAULTS = { repeat: 1, timeoutMs: 600_000, label: "model" };
 
@@ -149,7 +253,8 @@ export type BenchLiveArgs = {
   configs: string[] | null; // null = full config only
   repeat: number;
   timeoutMs: number;
-  out: string | null;       // null = caller makes a temp dir
+  out: string | null;       // null = caller makes a temp dir; else absolute, resolved
+  debugDir: string | null;  // null = no raw artifacts; else absolute, resolved
   label: string;
   list: boolean;
 };
@@ -183,6 +288,15 @@ export function parseBenchLiveArgs(argv: readonly string[]): BenchLiveArgs {
   };
   const tasks = get("--tasks");
   const configs = get("--configs");
+  const dirFlag = (name: string, raw: string | undefined): string | null => {
+    if (raw === undefined) return null;
+    if (raw === "") throw new Error(`invalid --${name}: empty`);
+    try {
+      return resolveOperatorPath(raw);
+    } catch (err) {
+      throw new Error(`--${name}: ${String((err as Error).message ?? err)}`);
+    }
+  };
   return {
     baseUrl: baseUrl ?? "",
     model: model ?? "",
@@ -190,7 +304,8 @@ export function parseBenchLiveArgs(argv: readonly string[]): BenchLiveArgs {
     configs: configs === undefined ? null : parseCommaList(configs),
     repeat: intFlag("--repeat", BENCH_LIVE_DEFAULTS.repeat),
     timeoutMs: intFlag("--timeout-ms", BENCH_LIVE_DEFAULTS.timeoutMs),
-    out: get("--out") ?? null,
+    out: dirFlag("out", get("--out")),
+    debugDir: dirFlag("debug-dir", get("--debug-dir")),
     label: get("--label") ?? BENCH_LIVE_DEFAULTS.label,
     list,
   };

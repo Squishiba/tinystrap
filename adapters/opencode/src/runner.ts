@@ -22,6 +22,11 @@ export class OpenCodeRunner implements HostRunner {
     // Truncate up front, then append each stdout chunk as it arrives: a run
     // killed mid-flight still leaves its partial transcript on disk.
     writeFileSync(transcriptPath, "");
+    // Host stderr is captured the same way for operator diagnosis
+    // (bench-live --debug-dir copies the whole logs dir). Purely additive:
+    // HostRunResult is unchanged, existing consumers ignore the extra file.
+    const stderrPath = join(task.logsDir, "host-stderr.log");
+    writeFileSync(stderrPath, "");
 
     return new Promise<HostRunResult>((resolve) => {
       const child = spawn(this.opts.bin ?? "opencode",
@@ -39,6 +44,9 @@ export class OpenCodeRunner implements HostRunner {
       child.stdout.on("data", (d: Buffer) => {
         raw += d.toString();
         appendFileSync(transcriptPath, d);
+      });
+      child.stderr.on("data", (d: Buffer) => {
+        try { appendFileSync(stderrPath, d); } catch { /* best effort */ }
       });
 
       let timedOut = false;
