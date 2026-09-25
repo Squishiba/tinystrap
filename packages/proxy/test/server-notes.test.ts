@@ -53,8 +53,10 @@ describe("pin_note through the server", () => {
     const pinned = (msgs: ChatMessage[]) => msgs.filter((m) =>
       m.role === "system" && m.content?.startsWith("--- pinned notes")).length;
     expect(pinned(seen[0])).toBe(0);  // store empty on the first request
-    expect(pinned(seen[1])).toBe(1);  // first call pinned "plan" → re-injected (spec 12.7)
-    expect(seen[1].find((m) => m.content?.startsWith("--- pinned notes"))!.content)
+    // The pin retry may add intermediate upstream calls within a request, so
+    // index the request under test from the end (second client request).
+    expect(pinned(seen.at(-1)!)).toBe(1);  // first call pinned "plan" → re-injected (spec 12.7)
+    expect(seen.at(-1)!.find((m) => m.content?.startsWith("--- pinned notes"))!.content)
       .toContain("plan: ship v1");
   });
 });
