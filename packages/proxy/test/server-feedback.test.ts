@@ -38,10 +38,16 @@ describe("interruptionContentSse", () => {
 });
 
 describe("correction reaches the model via the next request", () => {
+  // These tests exercise the interruption_feedback fallback exactly as on main,
+  // so the in-stream retry of denied calls is disabled for them (the retry path
+  // itself is covered by server-interruption-retry.test.ts).
+  const FALLBACK_FEATURES = { interruption_retry: false };
+
   it("opencode dialect: interrupt responds with content, next request carries the notice block", async () => {
     const provider = new CapturingProvider([unknownToolStream, textStream]);
     const proxy = await startProxy({ provider, registry: createToolRegistry(),
-      preflight: () => ({ effect: "allow" }), dialect: createOpenCodeDialect(), taskId: "t" });
+      preflight: () => ({ effect: "allow" }), dialect: createOpenCodeDialect(), taskId: "t",
+      features: FALLBACK_FEATURES });
     const first = await (await post(proxy.url, { model: "m", stream: true,
       messages: [{ role: "user", content: "go" }] })).text();
     expect(first).toContain("unknown_tool");
@@ -58,7 +64,8 @@ describe("correction reaches the model via the next request", () => {
   it("identity dialect keeps the harness_notice channel (no regression)", async () => {
     const provider = new CapturingProvider([unknownToolStream, textStream]);
     const proxy = await startProxy({ provider, registry: createToolRegistry(),
-      preflight: () => ({ effect: "allow" }), taskId: "t" });
+      preflight: () => ({ effect: "allow" }), taskId: "t",
+      features: FALLBACK_FEATURES });
     const first = await (await post(proxy.url, { model: "m", stream: true,
       messages: [{ role: "user", content: "go" }] })).text();
     await proxy.close();
@@ -68,7 +75,7 @@ describe("correction reaches the model via the next request", () => {
     const provider = new CapturingProvider([unknownToolStream, textStream]);
     const proxy = await startProxy({ provider, registry: createToolRegistry(),
       preflight: () => ({ effect: "allow" }), dialect: createOpenCodeDialect(), taskId: "t",
-      features: { interruption_feedback: false } });
+      features: { interruption_feedback: false, ...FALLBACK_FEATURES } });
     await (await post(proxy.url, { model: "m", stream: true,
       messages: [{ role: "user", content: "go" }] })).text();
     await (await post(proxy.url, { model: "m", stream: true,

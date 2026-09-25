@@ -16,7 +16,7 @@ import { applyPinNote, withPinnedNotes } from "./notetool.js";
 import { DEFAULT_FEATURES, type ProxyFeatures } from "./features.js";
 import { GuidanceState, parsePlanItems, toolCards, injectGuidance, STALL_NUDGE, STALL_REPLAN } from "./guidance.js";
 import { thinkingForRequest, selectProfile } from "./profiles.js";
-import type { ChatRequest, Provider, StreamChunk, ToolCall } from "./types.js";
+import type { ChatMessage, ChatRequest, Provider, StreamChunk, ToolCall } from "./types.js";
 
 export type ProxyDeps = {
   provider: Provider;
@@ -31,6 +31,10 @@ export type ProxyDeps = {
   dialect?: HostDialect;   // default createIdentityDialect(); the supervisor constructs
                            // createOpenCodeDialect(...) from tinystrap.toml [host] (later plan)
   phaseAllowlists?: Partial<Record<Phase, readonly string[]>>;   // same shape as PolicyContext's
+  // Cap on in-stream retries of gate-denied tool calls (interruption_retry);
+  // counted per client request, default 3. When exhausted (or when a retry
+  // request itself fails) the proxy falls back to the interruption behaviour.
+  maxInterruptRetries?: number;
 };
 
 export async function startProxy(deps: ProxyDeps, port = 0) {
@@ -106,6 +110,7 @@ async function handle(
     return;
   }
   const feats = { ...DEFAULT_FEATURES, ...deps.features };
+  const maxInterruptRetries = deps.maxInterruptRetries ?? 3;
   const taskId = deps.taskId ?? "proxy";
   if (feats.reasoning_control) {
     const kw = thinkingForRequest(chatReq.model, deps.serverCaps ?? null, deps.phase?.() ?? "planning");
@@ -160,7 +165,9 @@ async function handle(
     }) };
   }
   deps.onEvent?.(makeEvent(taskId, "tool_stream_started"));
-  const gate = new StreamGate({ registry: deps.registry, preflight: deps.preflight, dialect });
+  // A fresh gate guards each upstream attempt: the retry path re-arms the gate
+  // so the interrupted stream's buffered parts never leak into the next call.
+  let gate = new StreamGate({ registry: deps.registry, preflight: deps.preflight, dialect });
   const loop = feats.reasoning_control
     ? new LoopDetector({
       taskId, scoreThreshold: 0.7, backstopTokens: 2048, midStreamClose: false,
@@ -169,6 +176,15 @@ async function handle(
     })
     : undefined;
   const ac = new AbortController();
+  // The active upstream call's abort controller: interruptions, stall stops and
+  // backstops abort the stream currently being read, and the retry path swaps
+  // in a fresh controller per attempt (an aborted signal must never be re-used).
+  let currentAc = ac;
+  // Retry bookkeeping (interruption_retry): `retried` also distinguishes a retry
+  // request failure (content interruption fallback) from a first-stream failure
+  // (clean close, current behaviour).
+  let retried = false;
+  const retryState = { used: 0, lastReason: "" };
   res.writeHead(200, { "content-type": "text/event-stream" });
   // Tool-call fragments are held back until the gate has cleared the call
   // (spec 10.2: the host never sees a truncated fragment if we interrupt).
@@ -215,7 +231,7 @@ async function handle(
       const level = guidance.escalate();
       deps.onEvent?.(makeEvent(taskId, "stall_escalated", { reason: `${level}:${guidance.stallCount()}` }));
       if (level === "stop") {
-        ac.abort();
+        currentAc.abort();
         stopRequested = true;
         corrections.add("guidance: stall stop");
         res.write(interruptSse("guidance: stall stop"));
@@ -262,48 +278,95 @@ async function handle(
     return false;
   };
   try {
-    for await (const chunk of deps.provider.stream(chatReq, ac.signal)) {
-      // Token-usage capture (spec 15 metrics): OpenAI-compatible streams may
-      // report `usage` on the final chunk (llama.cpp sends it when the client
-      // requests `stream_options: { include_usage: true }` — whether the proxy
-      // must inject that flag for real runs is UNVERIFIED). Record whatever
-      // the stream carries; this is baseline instrumentation, intentionally
-      // not gated behind any ablation feature flag.
-      if (chunk.usage) {
-        deps.onEvent?.(makeEvent(taskId, "model_usage", {
-          usage: {
-            prompt: chunk.usage.prompt_tokens ?? 0,
-            completion: chunk.usage.completion_tokens ?? 0,
-          },
-        }));
-      }
-      const action = gate.push(chunk);
-      if (action.kind === "interrupt") {
-        ac.abort();
-        deps.onEvent?.(makeEvent(taskId, "tool_interrupted",
-          { tool: action.tool, reason: action.reason }));
-        corrections.add(action.reason);
-        res.write(interruptSse(action.reason));
-        res.end();
-        return;
-      }
-      const choice = chunk.choices[0];
-      const reasoning = choice?.delta.reasoning_content;
-      if (loop && reasoning) {
-        const action = loop.push(reasoning);
-        if (action === "nudge") res.write(formatSse(nudgeChunk()));
-        if (action === "backstop") {
-          ac.abort();
-          corrections.add("reasoning_backstop");
-          res.write(interruptSse("reasoning_backstop"));
+    // Retry loop (interruption_retry): a gate denial aborts nothing for the
+    // host — the buffered call is discarded and the provider is called again
+    // with the attempted tool call plus a role-"tool" correction message, and
+    // that response continues the same client SSE stream. Bounded per request
+    // by maxInterruptRetries; on exhaustion or a failed retry request the proxy
+    // falls back to the interruption behaviour exactly as before.
+    let streamAgain = true;
+    while (streamAgain) {
+      streamAgain = false;
+      for await (const chunk of deps.provider.stream(chatReq, currentAc.signal)) {
+        // Token-usage capture (spec 15 metrics): OpenAI-compatible streams may
+        // report `usage` on the final chunk (llama.cpp sends it when the client
+        // requests `stream_options: { include_usage: true }` — whether the proxy
+        // must inject that flag for real runs is UNVERIFIED). Record whatever
+        // the stream carries; this is baseline instrumentation, intentionally
+        // not gated behind any ablation feature flag.
+        if (chunk.usage) {
+          deps.onEvent?.(makeEvent(taskId, "model_usage", {
+            usage: {
+              prompt: chunk.usage.prompt_tokens ?? 0,
+              completion: chunk.usage.completion_tokens ?? 0,
+            },
+          }));
+        }
+        const action = gate.push(chunk);
+        if (action.kind === "interrupt") {
+          const calls = gate.accumulated();
+          if (feats.interruption_retry && retryState.used < maxInterruptRetries && calls.length > 0) {
+            // Retryable denial (gate/preflight): never surface it to the host.
+            retryState.used += 1;
+            retried = true;
+            retryState.lastReason = action.reason;
+            deps.onEvent?.(makeEvent(taskId, "tool_interrupted", {
+              tool: action.tool,
+              reason: `retrying ${retryState.used}/${maxInterruptRetries}: ${action.reason}`,
+            }));
+            const id = `call_retry_${retryState.used}_${Date.now().toString(36)}`;
+            const attempted = calls.find((c) => c.function.name === action.tool) ?? calls[0];
+            const assistantMsg: ChatMessage = {
+              role: "assistant",
+              content: null,
+              tool_calls: [{
+                id, type: "function",
+                function: { name: attempted.function.name, arguments: attempted.function.arguments || "{}" },
+              }],
+            };
+            const toolMsg: ChatMessage = {
+              role: "tool",
+              tool_call_id: id,
+              content: `Harness: ${action.reason}`,
+            };
+            chatReq = { ...chatReq, messages: [...chatReq.messages, assistantMsg, toolMsg] };
+            // Discard the blocked call's buffered fragments; a fresh gate and
+            // controller arm the next attempt.
+            pending.length = 0;
+            repairedOnce = false;
+            gate = new StreamGate({ registry: deps.registry, preflight: deps.preflight, dialect });
+            currentAc.abort();
+            currentAc = new AbortController();
+            streamAgain = true;
+            break;
+          }
+          // Fallback: the pre-existing interruption behaviour, unchanged.
+          currentAc.abort();
+          deps.onEvent?.(makeEvent(taskId, "tool_interrupted",
+            { tool: action.tool, reason: action.reason }));
+          corrections.add(action.reason);
+          res.write(interruptSse(action.reason));
           res.end();
           return;
         }
+        const choice = chunk.choices[0];
+        const reasoning = choice?.delta.reasoning_content;
+        if (loop && reasoning) {
+          const action = loop.push(reasoning);
+          if (action === "nudge") res.write(formatSse(nudgeChunk()));
+          if (action === "backstop") {
+            currentAc.abort();
+            corrections.add("reasoning_backstop");
+            res.write(interruptSse("reasoning_backstop"));
+            res.end();
+            return;
+          }
+        }
+        assistantText += choice?.delta.content ?? "";
+        if (choice?.finish_reason) { if (flushStream()) return; if (stopRequested) return; }
+        if (choice?.delta.tool_calls?.length) pending.push(chunk);
+        else res.write(formatSse(chunk));
       }
-      assistantText += choice?.delta.content ?? "";
-      if (choice?.finish_reason) { if (flushStream()) return; if (stopRequested) return; }
-      if (choice?.delta.tool_calls?.length) pending.push(chunk);
-      else res.write(formatSse(chunk));
     }
     const items = parsePlanItems(assistantText);
     if (items.length > 0 && !guidance.hasPlan()) {
@@ -317,6 +380,18 @@ async function handle(
   } catch {
     if (flushStream()) return;
     if (stopRequested) return;
+    if (retried) {
+      // A retry upstream request failed mid-stream: the model never saw the
+      // response, so deliver the correction the same way main does (content
+      // interruption) instead of closing silently.
+      currentAc.abort();
+      const reason = retryState.lastReason || "interrupted";
+      deps.onEvent?.(makeEvent(taskId, "tool_interrupted", { reason }));
+      corrections.add(reason);
+      res.write(interruptSse(reason));
+      res.end();
+      return;
+    }
     res.write(SSE_DONE);
     res.end();
   }

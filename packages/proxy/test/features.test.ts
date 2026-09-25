@@ -8,7 +8,7 @@ const SPEC_7_NAMES: (keyof ProxyFeatures)[] = [
 ];
 
 // Plan-level switches added by the host-dialects plan (not spec 7 mechanisms).
-const PLAN_FEATURES: (keyof ProxyFeatures)[] = ["interruption_feedback"];
+const PLAN_FEATURES: (keyof ProxyFeatures)[] = ["interruption_feedback", "interruption_retry"];
 
 describe("ProxyFeatures", () => {
   it("declares all six spec-7 mechanisms, defaulted on", () => {
