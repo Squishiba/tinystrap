@@ -6,7 +6,8 @@ import { seedRegistry, canonicalizeCalls } from "./seed.js";
 import { compileForwardedTools } from "./wire.js";
 import { formatSse, SSE_DONE } from "./sse.js";
 import { StreamGate, type Preflight } from "./gate.js";
-import { interruptionChunks, interruptionSse } from "./rewrite.js";
+import { interruptionChunks, interruptionSse, interruptionContentSse } from "./rewrite.js";
+import { CorrectionStore, injectCorrections } from "./feedback.js";
 import { repairToolCalls } from "./repair.js";
 import { truncateHistory } from "./budget.js";
 import { LoopDetector } from "./loopdetector.js";
@@ -37,6 +38,7 @@ export async function startProxy(deps: ProxyDeps, port = 0) {
   // assumption as bench Task 3's taskId); pinned state is not persisted
   // across startProxy calls / task resume (out of scope, spec 12.7).
   const notes = new NoteStore();
+  const corrections = new CorrectionStore();
   const server: Server = createServer((req, res) => {
     if (req.method !== "POST" || !req.url?.endsWith("/v1/chat/completions")) {
       res.writeHead(404).end("not found");
@@ -44,7 +46,7 @@ export async function startProxy(deps: ProxyDeps, port = 0) {
     }
     const body: Buffer[] = [];
     req.on("data", (d: Buffer) => body.push(d));
-    req.on("end", () => void handle(deps, body, res, notes));
+    req.on("end", () => void handle(deps, body, res, notes, corrections));
   });
   await new Promise<void>((resolve) => server.listen(port, "127.0.0.1", resolve));
   const addr = server.address();
@@ -92,6 +94,7 @@ function repairedChunk(calls: ToolCall[]): StreamChunk {
 
 async function handle(
   deps: ProxyDeps, body: Buffer[], res: ServerResponse, notes: NoteStore,
+  corrections: CorrectionStore,
 ): Promise<void> {
   let chatReq: ChatRequest;
   try { chatReq = JSON.parse(Buffer.concat(body).toString("utf8")) as ChatRequest; }
@@ -116,6 +119,12 @@ async function handle(
   // (live-check F3 cause 1): seed the shared registry before the gate runs.
   const dialect = deps.dialect ?? createIdentityDialect();
   seedRegistry(deps.registry, chatReq.tools, dialect);
+  // Dialects without a verified harness_notice channel get the correction as
+  // assistant content; the reason also goes into the next request's history.
+  const interruptSse = (reason: string): string =>
+    feats.interruption_feedback && !dialect.supportsHarnessNotice
+      ? interruptionContentSse(reason)
+      : interruptionSse(chatReq, reason);
   const guidance = new GuidanceState({
     taskId,
     toolCardLimit: (selectProfile(chatReq.model) as { toolCardLimit?: number }).toolCardLimit ?? 3,
@@ -126,6 +135,9 @@ async function handle(
     const cards = toolCards(deps.registry.all(), guidance.toolCardLimit);
     if (cards.length > 0) blocks.push(`tool cards:\n${cards.join("\n")}`);
     chatReq = { ...chatReq, messages: injectGuidance(chatReq.messages, blocks) };
+  }
+  if (feats.interruption_feedback) {
+    chatReq = { ...chatReq, messages: injectCorrections(chatReq.messages, corrections.pending()) };
   }
   // pin_note is a harness tool the host never implements: register it if the
   // caller's registry does not already carry it, and re-inject the pinned
@@ -203,7 +215,8 @@ async function handle(
       if (level === "stop") {
         ac.abort();
         stopRequested = true;
-        res.write(interruptionSse(chatReq, "guidance: stall stop"));
+        corrections.add("guidance: stall stop");
+        res.write(interruptSse("guidance: stall stop"));
         res.end();
         return;
       }
@@ -267,7 +280,8 @@ async function handle(
         ac.abort();
         deps.onEvent?.(makeEvent(taskId, "tool_interrupted",
           { tool: action.tool, reason: action.reason }));
-        res.write(interruptionSse(chatReq, action.reason));
+        corrections.add(action.reason);
+        res.write(interruptSse(action.reason));
         res.end();
         return;
       }
@@ -278,7 +292,8 @@ async function handle(
         if (action === "nudge") res.write(formatSse(nudgeChunk()));
         if (action === "backstop") {
           ac.abort();
-          res.write(interruptionSse(chatReq, "reasoning_backstop"));
+          corrections.add("reasoning_backstop");
+          res.write(interruptSse("reasoning_backstop"));
           res.end();
           return;
         }
