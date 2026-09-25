@@ -42,6 +42,23 @@ try { new URL(baseUrl); } catch {
   process.exit(2);
 }
 
+// Render one HarnessEvent (see packages/policy/src/audit.ts) as a single line
+// with every field except the timestamp and the kind (the kind is the prefix),
+// so the tool name, arguments, decision and reason are all visible. String
+// values are truncated recursively so a long command or digest stays on one line.
+function formatEventLine(e) {
+  const trunc = (v) =>
+    typeof v === "string" ? (v.length > 300 ? `${v.slice(0, 300)}…` : v)
+    : Array.isArray(v) ? v.map(trunc)
+    : v && typeof v === "object"
+      ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, trunc(x)]))
+      : v;
+  const { timestamp, kind, ...rest } = e;
+  return `[event] ${kind} ${JSON.stringify(trunc(rest))}`;
+}
+
+const eventCounts = new Map();
+
 const projectRoot = mkdtempSync(join(tmpdir(), "live-host-"));
 writeFileSync(join(projectRoot, "hello.txt"), "wrld\n");
 // createTask() only creates the task directories; the workspace must be
@@ -68,7 +85,10 @@ const proxy = await startProxy({
     { workspaceRoot: handle.workspaceDir, registry, readSet: new Set(),
       exists: () => false, realPaths: new Map(), ledger, evasion },
   ),
-  onEvent: (e) => console.log(`[event] ${e.kind} ${e.tool ?? ""}`),
+  onEvent: (e) => {
+    eventCounts.set(e.kind, (eventCounts.get(e.kind) ?? 0) + 1);
+    console.log(formatEventLine(e));
+  },
 });
 
 const result = await new OpenCodeRunner().run({
@@ -78,6 +98,9 @@ const result = await new OpenCodeRunner().run({
   model, proxyBaseUrl: proxy.url, timeoutMs: 300_000,
 });
 await proxy.close();
+
+console.log("event summary: " +
+  ([...eventCounts].map(([kind, n]) => `${kind}=${n}`).join(" ") || "(none)"));
 
 console.log({ exitCode: result.exitCode, timedOut: result.timedOut,
   cancelled: result.cancelled, transcript: result.transcriptPath });
