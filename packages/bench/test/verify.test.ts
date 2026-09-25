@@ -1,7 +1,9 @@
 import { describe, expect, it, beforeAll, afterAll } from "vitest";
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createTask, extractPatch, snapshotGit } from "@tinystrap/core";
 import { verifyInFreshCopy } from "@tinystrap/bench";
 
 let root: string;
@@ -89,4 +91,57 @@ describe("verifyInFreshCopy", () => {
     const { readFileSync } = await import("node:fs");
     expect(readFileSync(join(fixture, "a.txt"), "utf8")).toBe("1\n");
   });
+
+  it("reports a clear failure message when a patch does not apply", async () => {
+    const { fixture, hidden } = makeCase("apply-msg", "1\n");
+    const result = await verifyInFreshCopy(fixture, PATCH_2_TO_1, hidden, "node --test test.mjs");
+    expect(result.passed).toBe(false);
+    expect(result.outputTail).toContain("patch does not apply");
+  });
+
+  it("round-trips a text patch produced by core extractPatch", async () => {
+    const base = mkdtempSync(join(tmpdir(), "bench-verify-rt-"));
+    const proj = join(base, "proj");
+    mkdirSync(proj, { recursive: true });
+    gitIn(proj, "init", "-b", "main");
+    writeFileSync(join(proj, "a.txt"), "1\n");
+    gitIn(proj, "add", ".");
+    gitIn(proj, "commit", "-m", "init");
+    const h = await createTask(proj);
+    await snapshotGit(proj, h);
+    writeFileSync(join(h.workspaceDir, "a.txt"), "2\n");
+    const patch = await extractPatch(h);
+    const { hidden } = makeCase("roundtrip", "1\n");
+    const result = await verifyInFreshCopy(proj, patch, hidden, "node --test test.mjs");
+    expect(result.passed).toBe(true);
+    rmSync(h.taskDir, { recursive: true, force: true });
+  }, 60_000);
+
+  it("applies a binary patch produced by core extractPatch", async () => {
+    const base = mkdtempSync(join(tmpdir(), "bench-verify-bin-"));
+    const proj = join(base, "proj");
+    mkdirSync(proj, { recursive: true });
+    gitIn(proj, "init", "-b", "main");
+    writeFileSync(join(proj, "logo.bin"), Buffer.from([1, 2, 0, 255]));
+    gitIn(proj, "add", ".");
+    gitIn(proj, "commit", "-m", "init");
+    const h = await createTask(proj);
+    await snapshotGit(proj, h);
+    writeFileSync(join(h.workspaceDir, "logo.bin"), Buffer.from([9, 8, 0, 7, 0xfe]));
+    const patch = await extractPatch(h);
+    expect(patch).toContain("GIT binary patch");
+    const result = await verifyInFreshCopy(proj, patch, null, "git status");
+    expect(result.outputTail).not.toContain("cannot apply binary patch");
+    expect(result.passed).toBe(true);
+    rmSync(h.taskDir, { recursive: true, force: true });
+  }, 60_000);
 });
+
+// Git identity via IDENT env vars so no identity flags appear in sources.
+const gitEnv = {
+  ...process.env,
+  GIT_AUTHOR_IDENT: "t <t@t>",
+  GIT_COMMITTER_IDENT: "t <t@t>",
+};
+const gitIn = (cwd: string, ...args: string[]) =>
+  execFileSync("git", args, { cwd, stdio: "pipe", env: gitEnv });
