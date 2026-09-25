@@ -6,6 +6,8 @@ import type {
   ChatMessage, ChatRequest, Provider, RecordedStream, StreamChunk,
 } from "@tinystrap/proxy";
 
+const NUDGE_TEXT = "Pause: restate the next concrete step before continuing.";
+
 const opened: { url: string; close(): Promise<void> }[] = [];
 afterAll(async () => { for (const s of opened) await s.close(); });
 
@@ -150,12 +152,48 @@ describe("proxy feature wiring", () => {
     const intervention = events.find((e) => e.kind === "reasoning_intervention");
     expect(intervention).toBeDefined();
     expect(intervention?.reason).toContain("nudge");
-    expect(text).toContain("Pause: restate the next concrete step before continuing.");
+    // The nudge travels on the reasoning_content channel, never as visible answer content.
+    const records = parseSseRecords(text);
+    expect(records.some((c) =>
+      c.choices[0]?.delta?.reasoning_content === NUDGE_TEXT)).toBe(true);
+    expect(records.some((c) =>
+      c.choices[0]?.delta?.content === NUDGE_TEXT)).toBe(false);
+  });
+
+  it("emits no intervention for a non-looping token-delta reasoning stream", async () => {
+    const events: HarnessEvent[] = [];
+    const passage = [
+      "Planning the edit starts with reading the current contents of the target module carefully.",
+      "The module exposes a small factory function plus two helpers that the tests import directly.",
+      "I will overwrite the file with a version that keeps the exported names unchanged so callers stay unaffected.",
+      "Checking the call sites first would be prudent, but the grep output already listed only two of them.",
+      "The new implementation simplifies the branching by returning early when the input map is empty.",
+      "Error handling stays where it is today, wrapped around the filesystem call and rethrown with context.",
+      "Once the write succeeds I should run the focused test file to confirm nothing regressed at the seams.",
+      "If the suite is green the task is done and no further refactoring is warranted for this request.",
+      "A final skim of the diff will catch accidental whitespace damage before the change is considered complete.",
+      "The plan is concrete enough to start typing the replacement text into the editor buffer now.",
+    ].join(" ");
+    const chunks: StreamChunk[] = [];
+    for (let i = 0; i < passage.length; i += 4) {
+      chunks.push(chunk({ reasoning_content: passage.slice(i, i + 4) }));
+    }
+    chunks.push(chunk({}, "stop"));
+    const proxy = await runProxy({
+      provider: new FakeProvider(recorded(chunks)),
+      registry: registry(),
+      preflight: () => ({ effect: "allow" }),
+      onEvent: (e) => events.push(e),
+    });
+    const text = await post(proxy.url,
+      { model: "m", messages: [{ role: "user", content: "hi" }], stream: true });
+    expect(events.some((e) => e.kind === "reasoning_intervention")).toBe(false);
+    expect(text).not.toContain(NUDGE_TEXT);
   });
 
   it("caps interventions on a flooded reasoning stream and ends cleanly through the backstop", async () => {
     const events: HarnessEvent[] = [];
-    const delta = "going over the same ground again and again in circles here";
+    const delta = "going over the same ground again and again in circles here.";
     const chunks: StreamChunk[] =
       Array.from({ length: 300 }, () => chunk({ reasoning_content: delta }));
     chunks.push(chunk({}, "stop"));
@@ -179,8 +217,7 @@ describe("proxy feature wiring", () => {
     // one nudge text chunk per nudge event, no more
     const records = parseSseRecords(text);
     const nudgeChunks = records.filter((c) =>
-      c.choices[0]?.delta?.content
-        === "Pause: restate the next concrete step before continuing.").length;
+      c.choices[0]?.delta?.reasoning_content === NUDGE_TEXT).length;
     expect(nudgeChunks).toBe(nudges.length);
 
     // well-formed SSE ending cleanly through the backstop interruption
