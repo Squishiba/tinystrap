@@ -66,14 +66,20 @@ export class OpenCodeRunner implements HostRunner {
         });
       };
 
-      // Kill the whole tree, then stop waiting on `close`: an orphaned
-      // descendant holding the inherited stdout pipe would keep `close`
-      // from ever firing. Destroying the streams plus a short fallback
-      // timer bounds the settle even if the OS never closes the pipe.
+      // Kill the whole tree, then let `close` arrive naturally: once every
+      // process in the tree is dead its stdout pipe write handles close, the
+      // stream delivers any bytes the host already wrote and ends, and
+      // `close` settles with the full partial transcript. Destroying the
+      // streams *at kill time* would discard bytes still sitting unread in
+      // the OS pipe, silently losing transcript data the host wrote before
+      // the kill. Destroy only in the fallback, for the case where a
+      // descendant escaped the kill and would keep `close` from ever firing.
       const killAndArmFallback = () => {
         killProcessTree(child.pid ?? -1); // -1 (no pid) is a safe no-op
-        try { child.stdout?.destroy(); child.stderr?.destroy(); } catch { /* already closed */ }
-        fallback = setTimeout(() => settle(-1), 1_500);
+        fallback = setTimeout(() => {
+          try { child.stdout?.destroy(); child.stderr?.destroy(); } catch { /* already closed */ }
+          settle(-1);
+        }, 1_500);
         fallback.unref?.();
       };
       const killer = () => { timedOut = true; killAndArmFallback(); };
