@@ -8,7 +8,16 @@
 //   node --conditions=tinystrap-dist scripts/bench-live.mjs --list   # ids + configs, no network
 // Flags: --tasks <comma ids> (default: all coding tasks) --configs <comma
 // matrix labels> (default: full) --repeat <n> --timeout-ms <per task> --out
-// <dir> (default: a new directory under the OS temp dir) --label <short name>.
+// <dir> (default: a new directory under the OS temp dir) --debug-dir <dir>
+// --label <short name>. --out and --debug-dir are resolved against the current
+// directory; MSYS-style /c/... paths are rejected on Windows with a clear
+// message (Git Bash path rewriting would otherwise create a literal C:\c\...).
+// Debug artifacts (--debug-dir): for every run, raw diagnostics go into
+// <debug-dir>/<task>-<config>/ — host transcript and host stderr, proxy audit
+// events (JSONL), the verify command output tail, the extracted patch, and
+// the final workspace listing. THESE ARE OPERATOR-LOCAL ONLY: they contain
+// machine-local paths and raw model output and must NEVER be committed or
+// published. Default behaviour is unchanged: sanitized results.jsonl only.
 // The safety scenarios replay recorded streams (no model needed) and always
 // run once, under config "full", in the same report.
 // Results are written incrementally: one JSON line per finished run in
@@ -81,6 +90,7 @@ if (configs.some((c) => c === undefined)) {
 const outDir = args.out ?? mkdtempSync(join(tmpdir(), "bench-live-"));
 mkdirSync(outDir, { recursive: true });
 const resultsPath = join(outDir, "results.jsonl");
+if (args.debugDir !== null) mkdirSync(args.debugDir, { recursive: true });
 
 // SIGINT: stop starting new runs; the current run finishes (its own timeout
 // still owns the host-tree kill), its line is flushed, then the report is
@@ -122,6 +132,7 @@ for (const cfg of configs) {
           model: args.model,
           config: cfg.label,
           timeoutMs: args.timeoutMs,
+          debugDir: args.debugDir ?? undefined,
         }));
       } catch (err) {
         // One crashed run must not lose the others' data; log and continue.
@@ -134,4 +145,7 @@ for (const cfg of configs) {
 
 writeFileSync(join(outDir, "report.md"), renderMarkdown(results));
 console.log(`output directory: ${outDir}`);
+if (args.debugDir !== null) {
+  console.log(`debug artifacts (LOCAL ONLY, never commit): ${args.debugDir}`);
+}
 process.exit(0);
