@@ -1,5 +1,7 @@
 // Operator-gated: verifies the OpenCode adapter end-to-end against a REAL local
-// model server the operator already started.
+// model server the operator already started. Runs the proxy with the OpenCode
+// host dialect (createOpenCodeDialect), so OpenCode's real argument names
+// (filePath/oldString/...) are canonicalized before preflight.
 // Usage (after `pnpm typecheck` to build dist/):
 //   node --conditions=tinystrap-dist scripts/live-host-check-opencode.mjs --base-url http://127.0.0.1:8080 --model qwen2.5-coder-7b
 // From Git Bash on Windows, prefix with MSYS_NO_PATHCONV=1 if the --model value starts with a slash, otherwise Git Bash rewrites it into a Windows path.
@@ -15,7 +17,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startProxy, HttpProvider } from "../packages/proxy/dist/index.js";
 import { createTask, extractPatch, destroyTask, snapshotGit } from "../packages/core/dist/index.js";
-import { createToolRegistry, evaluate, ScriptLedger, EvasionTracker } from "../packages/policy/dist/index.js";
+import { createToolRegistry, evaluate, ScriptLedger, EvasionTracker, createOpenCodeDialect } from "../packages/policy/dist/index.js";
 import { OpenCodeRunner } from "../adapters/opencode/dist/index.js";
 
 const argv = process.argv.slice(2);
@@ -60,6 +62,7 @@ const evasion = new EvasionTracker();
 const proxy = await startProxy({
   provider: new HttpProvider({ baseUrl }),
   registry,
+  dialect: createOpenCodeDialect(),
   preflight: (tool, args) => evaluate(
     { tool, args, cwd: handle.workspaceDir, taskId: handle.taskId, phase: "implementation" },
     { workspaceRoot: handle.workspaceDir, registry, readSet: new Set(),
