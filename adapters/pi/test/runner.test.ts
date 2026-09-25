@@ -78,18 +78,53 @@ describe("PiRunner", () => {
       try { process.kill(pid, "SIGKILL"); } catch { /* already dead */ }
     }
   });
+  // The transcript is byte-faithful raw stdout: a run killed mid-write may
+  // legitimately end on a partial line, so parse line-by-line and skip
+  // fragments instead of JSON.parse-ing every line (that threw
+  // "Unexpected end of JSON input" on empty/partial transcripts).
+  const transcriptObjects = (transcriptPath: string): Array<{ type?: string; pid?: number; note?: string }> => {
+    let text = "";
+    try { text = readFileSync(transcriptPath, "utf8"); } catch { return []; }
+    return text.split("\n")
+      .map((l) => l.trim())
+      .filter((l) => l.length > 0)
+      .map((l) => { try { return JSON.parse(l); } catch { return null; } })
+      .filter((o) => o !== null);
+  };
   const grandchildPid = (transcriptPath: string): number => {
-    const line = readFileSync(transcriptPath, "utf8").trim().split("\n")
-      .map((l) => JSON.parse(l)).find((o) => o.type === "grandchild");
+    const line = transcriptObjects(transcriptPath).find((o) => o.type === "grandchild");
     expect(line, "transcript must contain the grandchild line printed before the kill").toBeTruthy();
-    trackedPids.push(line.pid);
-    return line.pid;
+    trackedPids.push(line.pid!);
+    return line.pid!;
   };
 
+  // Regression: killAndArmFallback used to destroy() the stdout stream at
+  // kill time, discarding bytes the host had already written into the OS
+  // pipe but the parent had not yet read — the "partial transcript" silently
+  // lost data written before the kill. The event loop is blocked here until
+  // the host confirms (via host-ready) that its synchronous line is in the
+  // pipe, so the kill provably lands with unread pipe data in flight.
+  it("keeps bytes already in the stdout pipe when the timeout kill lands", async () => {
+    const task = mkTask({ timeoutMs: 300 });
+    const p = fake(["--syncline"]).run(task);
+    const hard = Date.now() + 10_000;
+    // Synchronous poll: no event-loop turns, so no data events can drain
+    // the pipe before the kill.
+    while (!existsSync(join(task.logsDir, "host-ready"))) {
+      if (Date.now() > hard) throw new Error("fake host never wrote its synchronous line");
+    }
+    const r = await p;
+    expect(r.timedOut).toBe(true);
+    expect(transcriptObjects(r.transcriptPath).filter((o) => o.note === "syncline")).toHaveLength(1);
+  }, 15_000);
+
   it("kills the whole process tree on timeout and settles promptly with a partial transcript", async () => {
+    const task = mkTask({ timeoutMs: 2_000 });
     const start = Date.now();
-    const r = await fake(["--grandchild"]).run(mkTask({ timeoutMs: 600 }));
-    expect(Date.now() - start, "run() must settle within ~5 s of the kill").toBeLessThan(5_000);
+    const r = await fake(["--grandchild"]).run(task);
+    // Bound is relative to the kill: the assertion is about settling
+    // promptly after the timeout fires, not about the absolute deadline.
+    expect(Date.now() - start, "run() must settle within ~2.5 s of the kill").toBeLessThan(task.timeoutMs + 2_500);
     expect(r.timedOut).toBe(true);
     expect(r.cancelled).toBe(false);
     expect(r.exitCode).toBe(-1);
@@ -99,16 +134,26 @@ describe("PiRunner", () => {
   }, 15_000);
 
   it("kills the whole process tree on AbortSignal and settles promptly", async () => {
+    const task = mkTask({ timeoutMs: 30_000 });
+    const transcriptPath = join(task.logsDir, "host-transcript.jsonl");
     const ac = new AbortController();
-    const start = Date.now();
-    const p = fake(["--grandchild"]).run(mkTask({ timeoutMs: 30_000 }), ac.signal);
-    setTimeout(() => ac.abort(), 300);
+    const p = fake(["--grandchild"]).run(task, ac.signal);
+    // Deterministic kill point: abort only once the grandchild line has
+    // reached the transcript. A fixed abort delay raced host process startup
+    // on loaded runners and killed the host before its line was written.
+    const hard = Date.now() + 10_000;
+    while (!transcriptObjects(transcriptPath).some((o) => o.type === "grandchild")) {
+      if (Date.now() > hard) throw new Error("grandchild line never reached the transcript");
+      await new Promise((res) => setTimeout(res, 25));
+    }
+    const abortAt = Date.now();
+    ac.abort();
     const r = await p;
-    expect(Date.now() - start, "run() must settle within ~5 s of the abort").toBeLessThan(5_000);
+    expect(Date.now() - abortAt, "run() must settle within ~5 s of the abort").toBeLessThan(5_000);
     expect(r.cancelled).toBe(true);
     expect(r.timedOut).toBe(false);
     expect(r.exitCode).toBe(-1);
     const gcPid = grandchildPid(r.transcriptPath);
     expect(await waitForDead(gcPid, 3_000), `grandchild ${gcPid} survived the abort kill`).toBe(true);
-  }, 15_000);
+  }, 20_000);
 });

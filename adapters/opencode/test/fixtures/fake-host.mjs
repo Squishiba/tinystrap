@@ -1,11 +1,22 @@
 #!/usr/bin/env node
 // Fake host: prints opencode-style JSONL, optionally after a delay, then exits.
 import { spawn } from "node:child_process";
+import { writeSync, writeFileSync } from "node:fs";
 
 if (process.argv.includes("--grandchild")) {
   // Spawn a long-lived grandchild sharing our stdout, announce its pid, then hang.
   const gc = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60_000);"], { stdio: "inherit" });
-  process.stdout.write(JSON.stringify({ type: "grandchild", pid: gc.pid }) + "\n");
+  // writeSync, not process.stdout.write: writes to a pipe are async, and a
+  // force-kill (taskkill /F, SIGKILL) discards anything still sitting in our
+  // userspace buffer. writeSync puts the bytes in the OS pipe before we hang.
+  writeSync(1, JSON.stringify({ type: "grandchild", pid: gc.pid }) + "\n");
+  setTimeout(() => {}, 300_000);
+} else if (process.argv.includes("--syncline")) {
+  // Regression fixture for the kill-vs-pipe race: one synchronous stdout
+  // line, then a ready-marker so the test knows the bytes are in the OS
+  // pipe, then hang until killed.
+  writeSync(1, JSON.stringify({ type: "host_event", note: "syncline" }) + "\n");
+  writeFileSync("host-ready", "1");
   setTimeout(() => {}, 300_000);
 } else {
 await main();
