@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { runGit } from "./git.js";
+import { DEFAULT_PATCH_EXCLUDES, matchesPatchExclude } from "./patch.js";
 import { isSecretPath } from "./secrets.js";
 import type { TaskHandle } from "./taskstore.js";
 
@@ -13,6 +14,9 @@ export type Baseline = {
   trackedChangesHash: string;
   untrackedPolicy: string;
   createdAt: string;
+  // Set by snapshotManifest: pristine copy of the workspace tree, used by
+  // extractPatch to produce a diff for non-git baselines.
+  baselineTreeDir?: string;
 };
 
 export async function isGitProject(projectRoot: string): Promise<boolean> {
@@ -47,7 +51,7 @@ function copyInto(workspaceDir: string, projectRoot: string, rel: string): void 
 export async function snapshotGit(
   projectRoot: string,
   handle: TaskHandle,
-  opts: { allowIgnoredDirs?: string[] } = {},
+  opts: { allowIgnoredDirs?: string[]; extraExcludes?: string[] } = {},
 ): Promise<Baseline> {
   const head = await runGit(projectRoot, ["rev-parse", "HEAD"]);
   if (head.code !== 0) throw new Error(`not a git project: ${head.stderr}`);
@@ -66,10 +70,15 @@ export async function snapshotGit(
     if (applied.code !== 0) throw new Error(`apply tracked changes failed: ${applied.stderr}`);
   }
 
+  const excludes = [...DEFAULT_PATCH_EXCLUDES, ...(opts.extraExcludes ?? [])];
   const listed = await runGit(projectRoot, ["ls-files", "--others", "--exclude-standard"]);
+  // Generated artifacts (see DEFAULT_PATCH_EXCLUDES) are never copied into the
+  // workspace. An explicit allowIgnoredDirs entry below overrides this, so a
+  // fixture can still ship e.g. a node_modules directory on purpose.
   const files = listed.stdout.split("\n").filter((f) => f.trim() !== "")
     .filter((f) => !f.endsWith("/"))
     .filter((f) => !f.replace(/\\/g, "/").startsWith(".tinystrap/"))
+    .filter((f) => !matchesPatchExclude(f.replace(/\\/g, "/"), excludes))
     .filter((f) => !isSecretPath(f.replace(/\\/g, "/")));
   for (const f of files) copyInto(handle.workspaceDir, projectRoot, f);
 

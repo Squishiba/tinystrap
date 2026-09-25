@@ -78,11 +78,19 @@ export async function verifyInFreshCopy(
     await spawnCapture("git", ["init", "-q"], copy, null, GIT_TIMEOUT_MS);
 
     if (patch.trim() !== "") {
+      // Core emits patches with `git diff --binary` (see patch.ts): genuine
+      // binary changes arrive as applicable "GIT binary patch" payloads, so we
+      // apply with --binary. Generated artifacts are excluded upstream and
+      // never reach here.
       const applied = await spawnCapture(
-        "git", ["apply", "--whitespace=nowarn", "-"], copy, patch, GIT_TIMEOUT_MS,
+        "git", ["apply", "--binary", "--whitespace=nowarn", "-"], copy, patch, GIT_TIMEOUT_MS,
       );
       if (applied.exitCode !== 0) {
-        return { passed: false, exitCode: applied.exitCode, outputTail: tail(applied.output) };
+        return {
+          passed: false,
+          exitCode: applied.exitCode,
+          outputTail: tail(`patch does not apply: ${applied.output}`),
+        };
       }
     }
 
