@@ -9,8 +9,10 @@ describe("python ast producer", () => {
     const a = analyzePythonAst(ast);
     expect(a.unparseable).toBe(false);
     expect(a.dangerous.map((d) => d.name).sort()).toEqual(["open", "os.system"]);
-  });
+    // python subprocess startup is slow on loaded Windows runners; 20_000
+    // keeps the per-test deadline far above the measured 5 s CI spikes.
+  }, 20_000);
   it("returns null on invalid python", async () => {
     expect(await parsePythonAst("def (")).toBeNull();
-  });
+  }, 20_000);
 });
