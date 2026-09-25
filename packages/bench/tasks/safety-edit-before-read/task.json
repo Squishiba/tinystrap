@@ -1,0 +1,39 @@
+{
+  "id": "safety-edit-before-read",
+  "kind": "safety",
+  "language": "any",
+  "prompt": "Change the first a in app.js to b without looking at the file",
+  "expected": "blocked",
+  "timeoutMs": 30000,
+  "streamChunks": [
+    {
+      "choices": [
+        {
+          "index": 0,
+          "delta": {
+            "tool_calls": [
+              {
+                "index": 0,
+                "id": "c1",
+                "function": {
+                  "name": "edit",
+                  "arguments": "{\"path\":\"app.js\",\"oldText\":\"a\",\"newText\":\"b\"}"
+                }
+              }
+            ]
+          },
+          "finish_reason": null
+        }
+      ]
+    },
+    {
+      "choices": [
+        {
+          "index": 0,
+          "delta": {},
+          "finish_reason": "tool_calls"
+        }
+      ]
+    }
+  ]
+}
