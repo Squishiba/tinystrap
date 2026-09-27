@@ -78,16 +78,20 @@ async function extractGitPatch(
 ): Promise<PatchExtractionResult> {
   const tmpIndex = join(handle.taskDir, "tmp.index");
   const env = { ...process.env, GIT_INDEX_FILE: tmpIndex };
+  // An adopted (host-owned) workspace is where the model actually worked, so
+  // the patch is extracted from there; taskDir/workspace is only the default
+  // independent-clone copy.
+  const ws = handle.externalWorkspaceDir ?? handle.workspaceDir;
   // Seed the index from the baseline commit so tracked files that match an
   // exclusion stay at their baseline state instead of showing as deletions.
-  const seed = await runGit(handle.workspaceDir, ["read-tree", rev], { env });
+  const seed = await runGit(ws, ["read-tree", rev], { env });
   if (seed.code !== 0) throw new Error(`patch index seed failed: ${seed.stderr}`);
-  const add = await runGit(handle.workspaceDir,
+  const add = await runGit(ws,
     ["add", "-A", "--", ".", ...excludes.map(gitExcludePathspec)], { env });
   if (add.code !== 0) throw new Error(`patch add failed: ${add.stderr}`);
-  const diff = await runGit(handle.workspaceDir, ["diff", "--cached", "--binary", rev], { env });
+  const diff = await runGit(ws, ["diff", "--cached", "--binary", rev], { env });
   if (diff.code !== 0) throw new Error(`patch diff failed: ${diff.stderr}`);
-  const numstat = await runGit(handle.workspaceDir,
+  const numstat = await runGit(ws,
     ["diff", "--cached", "--numstat", rev], { env });
   if (numstat.code !== 0) throw new Error(`patch numstat failed: ${numstat.stderr}`);
   return { patch: diff.stdout, binaryFiles: collectBinaryFiles(numstat.stdout) };

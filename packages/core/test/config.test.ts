@@ -15,6 +15,19 @@ describe("config loader", () => {
     const c = await loadConfig({ projectRoot: project("") });
     expect(c["promotion.mode"]).toEqual({ value: "apply", source: "builtin" });
   });
+  it("builtins the workspace table and post-apply verification default", async () => {
+    const c = await loadConfig({ projectRoot: project("") });
+    expect(c["workspace.provider"])
+      .toEqual({ value: "independent-clone", source: "builtin" });
+    expect(c["promotion.postApplyVerify"]).toEqual({ value: true, source: "builtin" });
+  });
+  it("maps post_apply_verify to promotion.postApplyVerify", async () => {
+    const c = await loadConfig({
+      projectRoot: project("[promotion]\npost_apply_verify = false\n"),
+    });
+    expect(c["promotion.postApplyVerify"])
+      .toEqual({ value: false, source: "project" });
+  });
   it("project file beats discovered, cli beats project", async () => {
     const dir = project('[server]\nmodel = "proj-model"\n');
     const c = await loadConfig({

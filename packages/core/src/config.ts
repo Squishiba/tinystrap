@@ -11,13 +11,17 @@ const BUILTIN: Record<string, unknown> = {
   "server.baseUrl": undefined,
   "server.model": undefined,
   "promotion.mode": "apply",
+  "promotion.postApplyVerify": true,
   "snapshot.allowIgnoredDirs": [],
   "verify.test": undefined,
+  "workspace.provider": "independent-clone",
+  "workspace.path": undefined,
 };
 
 const KEY_MAP: Record<string, string> = {
   base_url: "baseUrl",
   allow_ignored_dirs: "allowIgnoredDirs",
+  post_apply_verify: "postApplyVerify",
 };
 
 function flatten(obj: Record<string, unknown>, prefix: string, out: Record<string, unknown>): void {
