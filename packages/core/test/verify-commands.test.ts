@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { detectVerifyCommands } from "@tinystrap/core";
+import { detectVerifyCommands, resolveVerifyCommands, verifyOverridesFromConfig } from "@tinystrap/core";
 
 function project(setup: (dir: string) => void): string {
   const dir = mkdtempSync(join(tmpdir(), "ts-vdetect-"));
@@ -41,5 +41,42 @@ describe("detectVerifyCommands", () => {
   it("tolerates a malformed package.json", () => {
     const dir = project((d) => writeFileSync(join(d, "package.json"), "{not json"));
     expect(detectVerifyCommands(dir)).toEqual([]);
+  });
+});
+
+describe("resolveVerifyCommands", () => {
+  const detected = [
+    { name: "test", command: "pnpm run test" },
+    { name: "lint", command: "pnpm run lint" },
+  ];
+  it("an override replaces the detected command with the same name", () => {
+    expect(resolveVerifyCommands(detected, { test: "pnpm vitest run" })).toEqual([
+      { name: "test", command: "pnpm vitest run" },
+      { name: "lint", command: "pnpm run lint" },
+    ]);
+  });
+  it("an empty-string override disables a detected command", () => {
+    expect(resolveVerifyCommands(detected, { lint: "" })).toEqual(
+      [{ name: "test", command: "pnpm run test" }]);
+  });
+  it("an unknown key adds a new command", () => {
+    expect(resolveVerifyCommands(detected, { smoke: "node smoke.mjs" })).toEqual([
+      { name: "test", command: "pnpm run test" },
+      { name: "lint", command: "pnpm run lint" },
+      { name: "smoke", command: "node smoke.mjs" },
+    ]);
+  });
+  it("non-string override values are ignored", () => {
+    expect(resolveVerifyCommands(detected, { test: 42 })).toEqual(detected);
+  });
+});
+
+describe("verifyOverridesFromConfig", () => {
+  it("collects only verify.* keys, stripped", () => {
+    const config = {
+      "verify.test": { value: "pnpm vitest run", source: "project" as const },
+      "promotion.mode": { value: "apply", source: "builtin" as const },
+    };
+    expect(verifyOverridesFromConfig(config)).toEqual({ test: "pnpm vitest run" });
   });
 });
