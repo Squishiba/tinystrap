@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   createTask, createIndependentCloneProvider, createExternalWorkspaceProvider,
-  extractPatch, openTask,
+  extractPatch, openTask, loadConfig, workspaceProviderFromConfig,
 } from "@tinystrap/core";
 
 function gitProject(): string {
@@ -73,5 +73,32 @@ describe("external workspace provider", () => {
     const handle = await createTask(root);
     await expect(createExternalWorkspaceProvider().adopt(handle, plain))
       .rejects.toThrow(/git repository/);
+  });
+});
+
+async function configWith(toml: string, name: string): Promise<ReturnType<typeof loadConfig>> {
+  const dir = mkdtempSync(join(tmpdir(), `ts-wcfg-${name}-`));
+  writeFileSync(join(dir, "tinystrap.toml"), toml);
+  return loadConfig({ projectRoot: dir });
+}
+
+describe("workspaceProviderFromConfig", () => {
+  it("defaults to independent-clone", async () => {
+    const config = await configWith("", "def");
+    expect(workspaceProviderFromConfig(config).id).toBe("independent-clone");
+  });
+  it("external requires a path", async () => {
+    const config = await configWith('[workspace]\nprovider = "external"\n', "nopath");
+    expect(() => workspaceProviderFromConfig(config)).toThrow(/workspace.path/);
+  });
+  it("external with a path selects the external provider", async () => {
+    const host = gitProject();
+    const config = await configWith(
+      `[workspace]\nprovider = "external"\npath = ${JSON.stringify(host)}\n`, "withpath");
+    expect(workspaceProviderFromConfig(config).id).toBe("external");
+  });
+  it("unknown provider names are refused, not defaulted", async () => {
+    const config = await configWith('[workspace]\nprovider = "docker"\n', "bogus");
+    expect(() => workspaceProviderFromConfig(config)).toThrow(/unknown workspace provider/);
   });
 });

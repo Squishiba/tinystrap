@@ -4,12 +4,13 @@
 // the spec's create(baseline) predates the code where snapshotting is what
 // creates a baseline.
 import { createHash } from "node:crypto";
-import { writeFileSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { isGitProject, snapshotGit, captureWorkspaceManifestHash } from "./snapshot-git.js";
 import { snapshotManifest } from "./snapshot-manifest.js";
 import { runGit } from "./git.js";
 import type { Baseline } from "./snapshot-git.js";
+import type { ResolvedConfig } from "./config.js";
 import type { TaskHandle } from "./taskstore.js";
 
 export interface WorkspaceProvider {
@@ -73,4 +74,23 @@ export function createExternalWorkspaceProvider(): WorkspaceProvider {
       return baseline;
     },
   };
+}
+
+// Spec 7: the [workspace] table selects the provider; external demands a
+// path. Unknown names fail loudly — silently falling back to the default
+// would hide a typo behind a full re-clone of the wrong tree.
+export function workspaceProviderFromConfig(config: ResolvedConfig): WorkspaceProvider {
+  const provider = String(config["workspace.provider"]?.value ?? "independent-clone");
+  if (provider === "independent-clone") return createIndependentCloneProvider();
+  if (provider === "external") {
+    const path = config["workspace.path"]?.value;
+    if (typeof path !== "string" || path.trim() === "") {
+      throw new Error("workspace.path is required when workspace.provider = \"external\"");
+    }
+    if (!existsSync(path)) {
+      throw new Error(`workspace.path does not exist: ${path}`);
+    }
+    return createExternalWorkspaceProvider();
+  }
+  throw new Error(`unknown workspace provider "${provider}" (expected independent-clone or external)`);
 }
