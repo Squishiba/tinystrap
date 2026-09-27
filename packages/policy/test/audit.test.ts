@@ -25,3 +25,18 @@ describe("host-layer event kinds (spec 13.4)", () => {
     expect(e.hostEventType).toBe("session.idle");
   });
 });
+
+describe("verifier/promotion event kinds (spec 13.4)", () => {
+  it("constructs the five lifecycle kinds", () => {
+    expect(makeEvent("t1", "verification_started", { reason: "2 commands" }).kind)
+      .toBe("verification_started");
+    expect(makeEvent("t1", "verification_finished", { decision: "pass" }).kind)
+      .toBe("verification_finished");
+    expect(makeEvent("t1", "promotion_requested", { reason: "mode=apply" }).kind)
+      .toBe("promotion_requested");
+    expect(makeEvent("t1", "promotion_applied", { decision: "apply" }).kind)
+      .toBe("promotion_applied");
+    expect(makeEvent("t1", "promotion_refused", { reason: "drift" }).kind)
+      .toBe("promotion_refused");
+  });
+});
