@@ -22,12 +22,23 @@ function checkJs(content: string): SyntaxCheck {
   catch (err) { return { ok: false, error: (err as Error).message.split("\n")[0] }; }
 }
 
-function checkPython(content: string): Promise<SyntaxCheck> {
+// `python` is the Windows convention; most POSIX boxes (this one included)
+// only install `python3`. Try `python` first (no extra process spawn on the
+// common case) and fall back to `python3` only on ENOENT — a real syntax
+// error from either binary should resolve, not trigger a retry.
+const PYTHON_CANDIDATES: readonly string[] = ["python", "python3"];
+
+function checkPython(content: string, candidates: readonly string[] = PYTHON_CANDIDATES): Promise<SyntaxCheck> {
+  const [bin, ...rest] = candidates;
   return new Promise((resolve) => {
-    const child = execFile("python",
+    const child = execFile(bin,
       ["-c", "import ast,sys; ast.parse(sys.stdin.read())"],
       (err, _out, stderr) => {
         if (!err) { resolve({ ok: true }); return; }
+        if ((err as NodeJS.ErrnoException).code === "ENOENT" && rest.length > 0) {
+          resolve(checkPython(content, rest));
+          return;
+        }
         const first = (stderr || "").split(/\r?\n/).find((l) => l.trim() !== "") ?? "syntax error";
         resolve({ ok: false, error: first.trim() });
       });
