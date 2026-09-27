@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { PYTHON_CANDIDATES } from "./syntax.js";
 
 const DRIVER = `
 import ast, json, sys
@@ -41,12 +42,28 @@ for n in ast.walk(tree):
 print(json.dumps(flat(tree)))
 `;
 
-export function parsePythonAst(source: string): Promise<unknown | null> {
+// Same `python`-vs-`python3` problem as syntax.ts's checkPython, and the same
+// fix: try each candidate in turn, but only ever retry on ENOENT (a missing
+// binary) — a real parse failure (SyntaxError, exit 1) resolves null on the
+// first candidate that runs, same as before this fix.
+export function parsePythonAst(
+  source: string,
+  candidates: readonly string[] = PYTHON_CANDIDATES,
+): Promise<unknown | null> {
+  const [bin, ...rest] = candidates;
+  if (bin === undefined) return Promise.resolve(null);
   return new Promise((resolve) => {
-    const child = execFile("python", ["-c", DRIVER], { maxBuffer: 32 * 1024 * 1024 },
+    const child = execFile(bin, ["-c", DRIVER], { maxBuffer: 32 * 1024 * 1024 },
       (err, stdout) => {
-        if (err) { resolve(null); return; }
-        try { resolve(JSON.parse(stdout)); } catch { resolve(null); }
+        if (!err) {
+          try { resolve(JSON.parse(stdout)); } catch { resolve(null); }
+          return;
+        }
+        if ((err as NodeJS.ErrnoException).code === "ENOENT" && rest.length > 0) {
+          resolve(parsePythonAst(source, rest));
+          return;
+        }
+        resolve(null);
       });
     child.stdin?.write(source);
     child.stdin?.end();

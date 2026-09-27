@@ -804,7 +804,12 @@ proxy, so the streaming gate and the policy engine apply to whatever the host
 does. The workspace is independent-clone when the harness launches the host,
 or **external** when another orchestrator supplies the directory.
 
-**Mode 3 — inside AO (Agent Orchestrator).** An AO worker runs pi or opencode
+**Mode 3 — inside AO (Agent Orchestrator).** **STALE (2026-09-27):** AO has
+been retired in favor of Paseo. This mode's description, its column in the
+guarantees table below, and every "to verify against a real AO worker" item
+elsewhere in this spec describe a tool that no longer exists and need a fresh
+design pass against Paseo before anyone relies on them. Left as originally
+written below pending that pass. An AO worker runs pi or opencode
 configured with the proxy as its model endpoint, and AO passes its per-worker
 git worktree to tinystrap as the **external** workspace (§9.2). Promotion uses
 **open_pr** (§9.10), so the result appears in AO's own PR/CI/review/merge flow
@@ -816,7 +821,7 @@ isolation = structural workspace isolation; verification = fresh-workspace
 re-verify; promotion control = human-gated, broker-only promotion; OS
 containment = OS-level sandbox (§9.8):
 
-| Guarantee            | 1. Standalone | 2. Host-integrated                          | 3. Inside AO            |
+| Guarantee            | 1. Standalone | 2. Host-integrated                          | 3. Inside AO (stale — AO retired, see note above) |
 | -------------------- | ------------- | ------------------------------------------- | ----------------------- |
 | Policy gate          | yes           | yes (to verify)                            | yes (to verify)        |
 | Streaming preflight  | yes           | yes (to verify)                            | yes (to verify)        |
@@ -835,8 +840,9 @@ when the host owns the lifecycle (open question 10).
 In modes 2 and 3 with an external workspace, git-metadata isolation is **not
 structural** and rests on the policy engine denying git push, branch deletion,
 ref updates, and other git writes that reach outside the workspace, plus the
-credential-scrubbing rules (§9.2). Nothing in this section has been tested
-against a real AO worker yet — **to verify** (Appendix A11).
+credential-scrubbing rules (§9.2). **STALE (2026-09-27, AO retired — see
+§13.5):** nothing in this section has been tested against a real AO worker,
+and now needs re-asking against Paseo instead — **to verify** (Appendix A11).
 
 ## 14. Error handling
 
@@ -974,7 +980,8 @@ Each has a recommended default; none blocks the build.
    `*.pem`, `id_*`, credential stores, token patterns) plus user
    extend/exclude in config; false-excludes are recoverable since the
    protected project is never modified.
-9. **Does AO expose a per-worker model-endpoint setting for pi/opencode?**
+9. **STALE (2026-09-27, AO retired — see §13.5): Does AO expose a per-worker
+   model-endpoint setting for pi/opencode?** Needs re-asking against Paseo.
    The inside-AO mode (§13.5) needs the proxy URL configured per worker.
    Whether AO exposes such a setting is **unknown**, and the plan does not
    rely on it. Fallback: configure the host tool's own provider setting (for
@@ -1051,5 +1058,5 @@ server: llama.cpp b10934, model `Qwen3.8-Flash-Next-AP-Q4_K_M`,
 | 8 | Server support for forced reasoning-close (continuation) | §12.6 | **Partial** — per-request thinking-off verified on llama.cpp via `chat_template_kwargs {"enable_thinking": false}` (zero reasoning chunks; generic `thinking: {"type": "disabled"}` rejected/ignored). **Mid-stream forced close (interrupt then resume) NOT tested — stays open**; the loop-detector's "close reasoning" escalation step (§12.6) depends on it. Evidence: `fixtures/reasoning.jsonl:1` |
 | 9 | little-coder reference scores: Polyglot 45.6% / 78.7%; TB 2.0 24.6% / 9.2%; TB-Core ~6h50m/80 tasks | §15 | Open (re-read README + own runs) |
 | 10 | **New (spike):** is the reported `n_ctx` (128000) the **total** or the **per-slot** context (observed `total_slots` 4)? | §8, §12.3 | **To verify** — discovery must determine it (e.g. slot-info probe / `GET /slots`) before context budgeting relies on the number; budgets must not assume either reading |
-| 11 | **New (deploy modes):** whether AO exposes a per-worker model-endpoint setting for pi/opencode is **unknown** and the plan does not rely on it (fallback: the host tool's own provider setting — OpenCode provider config or pi's provider/model config — in the worker's workspace or environment) | §13.5, §18 | **To verify** — nothing here has been tested against a real AO worker yet |
+| 11 | **New (deploy modes): STALE (2026-09-27, AO retired — see §13.5).** Whether AO exposes a per-worker model-endpoint setting for pi/opencode is **unknown** and the plan does not rely on it (fallback: the host tool's own provider setting — OpenCode provider config or pi's provider/model config — in the worker's workspace or environment) | §13.5, §18 | **To verify** — nothing here has been tested against a real AO worker, and now needs re-asking against Paseo instead |
 | 12 | **New (deploy modes):** how the proxy learns the current phase/task when the host owns the task lifecycle in external mode | §13.5, §18 | **To verify** — default: explicit host handoff (`tinystrap task attach`) plus `.tinystrap/` state |

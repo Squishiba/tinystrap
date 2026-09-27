@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parsePythonAst } from "@tinystrap/core";
+import { parsePythonAst, PYTHON_CANDIDATES } from "@tinystrap/core";
 import { analyzePythonAst } from "@tinystrap/policy";
 
 describe("python ast producer", () => {
@@ -14,5 +14,12 @@ describe("python ast producer", () => {
   }, 20_000);
   it("returns null on invalid python", async () => {
     expect(await parsePythonAst("def (")).toBeNull();
+  }, 20_000);
+  // Pins the ENOENT-retry deterministically regardless of which of
+  // python/python3 this box has (same rationale as syntax.test.ts).
+  it("falls back past a missing interpreter to a working one", async () => {
+    const ast = await parsePythonAst("os.system('ls')\n",
+      ["definitely-not-a-real-binary-xyz", ...PYTHON_CANDIDATES]);
+    expect(ast).not.toBeNull();
   }, 20_000);
 });
