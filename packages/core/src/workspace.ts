@@ -34,7 +34,7 @@ export function createIndependentCloneProvider(): WorkspaceProvider {
   };
 }
 
-// External provider (spec 9.2, 13.5 mode 3): the host — an AO worker, a git
+// External provider (spec 9.2, 13.5 mode 3): the host — a Paseo worker, a git
 // worktree — already owns the directory. The harness does NOT copy it and
 // does NOT own its lifecycle; it records a baseline from the directory's own
 // git state and points the handle at it. Git-metadata isolation is NOT

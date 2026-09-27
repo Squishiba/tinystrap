@@ -41,7 +41,7 @@ describe("independent-clone provider", () => {
 
 describe("external workspace provider", () => {
   it("adopts a host directory: baseline from its HEAD, patch from its dirty state", async () => {
-    const hostDir = gitProject();                       // the AO-style worktree
+    const hostDir = gitProject();                       // a Paseo-style worktree
     const root = mkdtempSync(join(tmpdir(), "ts-wsp-meta-"));  // tinystrap metadata root
     const handle = await createTask(root);
     const provider = createExternalWorkspaceProvider();

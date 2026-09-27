@@ -31,7 +31,7 @@ Copied from the spec (and the task brief); these bind every task:
 - Audit events use Plan 2's `HarnessEvent` model; no secrets or full sensitive arguments — hashes and redacted summaries (spec §13.4).
 - Every small-model mechanism is **individually switchable** (spec §12).
 - Explicitly deferred out of this plan: forced mid-stream reasoning-close implementation (optional Task 14 only), OpenCode/pi adapters, verifier (§9.9), promotion broker (§9.10), sandbox (§9.8), bench (§15).
-- Shell commands in this plan use **only** the allowed set: `git`, `python`, `python -m pytest`, `pytest`, `ruff`, `pnpm`, `npm`, `mkdir`, `paseo`, `node`, `tinystrap`, `refdes`. **Never** `rm`, `npx`, or inline-assignment prefixes (`VAR=value cmd`) — these are refused by the shell whitelist; where an env var is needed (e.g. the temp-index flow), do it inside Node code, not the shell.
+- Shell commands in this plan use **only** the allowed set: `git`, `python`, `python -m pytest`, `pytest`, `ruff`, `pnpm`, `npm`, `mkdir`, `ao` (retired 2026-09-26, see spec §13.5), `node`, `tinystrap`, `refdes`. **Never** `rm`, `npx`, or inline-assignment prefixes (`VAR=value cmd`) — these are refused by the shell whitelist; where an env var is needed (e.g. the temp-index flow), do it inside Node code, not the shell.
 - Windows/Git Bash: forward-slash-safe paths; all commands run from the repo root.
 - Strict TDD, DRY, YAGNI, one commit per task minimum; every commit message ends with the line `Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>`.
 
