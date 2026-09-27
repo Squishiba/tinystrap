@@ -4,7 +4,9 @@ export type HarnessEventKind =
   | "baseline_captured" | "patch_extracted" | "patch_exported"
   | "tool_stream_started" | "tool_interrupted" | "reasoning_intervention"
   | "tool_executed" | "tool_failed" | "tool_call_repaired" | "host_event"
-  | "guidance_updated" | "stall_escalated" | "model_usage";
+  | "guidance_updated" | "stall_escalated" | "model_usage"
+  | "verification_started" | "verification_finished"
+  | "promotion_requested" | "promotion_applied" | "promotion_refused";
 
 export type HarnessEvent = {
   taskId: string;

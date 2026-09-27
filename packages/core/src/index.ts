@@ -10,4 +10,5 @@ export * from "./pythonast.js";
 export * from "./syntax.js";
 export * from "./hostrunner.js";
 export * from "./killtree.js";
+export * from "./verify-commands.js";
 export * from "./workspace.js";
