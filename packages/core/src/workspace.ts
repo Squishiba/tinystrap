@@ -3,8 +3,12 @@
 // Signature note (plan open question 1): providers PRODUCE the Baseline —
 // the spec's create(baseline) predates the code where snapshotting is what
 // creates a baseline.
-import { isGitProject, snapshotGit } from "./snapshot-git.js";
+import { createHash } from "node:crypto";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { isGitProject, snapshotGit, captureWorkspaceManifestHash } from "./snapshot-git.js";
 import { snapshotManifest } from "./snapshot-manifest.js";
+import { runGit } from "./git.js";
 import type { Baseline } from "./snapshot-git.js";
 import type { TaskHandle } from "./taskstore.js";
 
@@ -25,6 +29,48 @@ export function createIndependentCloneProvider(): WorkspaceProvider {
     },
     async adopt() {
       throw new Error("adopt is not supported by the independent-clone provider");
+    },
+  };
+}
+
+// External provider (spec 9.2, 13.5 mode 3): the host — an AO worker, a git
+// worktree — already owns the directory. The harness does NOT copy it and
+// does NOT own its lifecycle; it records a baseline from the directory's own
+// git state and points the handle at it. Git-metadata isolation is NOT
+// structural here (spec table): policy + the promotion broker are the guard.
+// v1 requires the adopted directory to be a git repo (patch extraction is
+// git-only — plan open question 3).
+export function createExternalWorkspaceProvider(): WorkspaceProvider {
+  return {
+    id: "external",
+    async create() {
+      throw new Error("the external provider never creates workspaces; use adopt()");
+    },
+    async adopt(handle, externalDir) {
+      const probe = await runGit(externalDir, ["rev-parse", "--git-dir"]);
+      if (probe.code !== 0) {
+        throw new Error(`adopted workspace is not a git repository: ${externalDir} ` +
+          `(external workspaces need git for patch extraction)`);
+      }
+      const head = await runGit(externalDir, ["rev-parse", "HEAD"]);
+      if (head.code !== 0) {
+        throw new Error(`adopted workspace has no commits yet: ${externalDir}`);
+      }
+      const diff = await runGit(externalDir, ["diff", "HEAD"]);
+      const baseline: Baseline = {
+        taskId: handle.taskId,
+        sourceRoot: externalDir,
+        revision: `git:${head.stdout.trim()}`,
+        manifestHash: await captureWorkspaceManifestHash(externalDir),
+        trackedChangesHash: `sha256:${createHash("sha256").update(diff.stdout).digest("hex")}`,
+        untrackedPolicy: "external:host-owned",
+        createdAt: new Date().toISOString(),
+      };
+      writeFileSync(handle.baselinePath, JSON.stringify(baseline, null, 2));
+      writeFileSync(join(handle.taskDir, "external.json"),
+        JSON.stringify({ dir: externalDir }, null, 2));
+      handle.externalWorkspaceDir = externalDir;
+      return baseline;
     },
   };
 }
