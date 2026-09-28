@@ -78,8 +78,10 @@ describe("verifyInFreshWorkspace", () => {
     return { root, handle, baseline, patch };
   }
 
+  // git checkout normalizes line endings per core.autocrlf on Windows, so the
+  // fresh copy's a.txt may read back as "two\r\n" there (same as patch.test.ts).
   const PASSES = "import { readFileSync } from 'node:fs';\n" +
-    "process.exit(readFileSync('a.txt', 'utf8') === 'two\\n' ? 0 : 1);\n";
+    "process.exit(readFileSync('a.txt', 'utf8').replace(/\\r\\n/g, '\\n') === 'two\\n' ? 0 : 1);\n";
 
   type EventLike = { kind: string; taskId: string; decision?: string };
 
@@ -112,7 +114,9 @@ describe("verifyInFreshWorkspace", () => {
     expect(existsSync(join(handle.taskDir, dirs[0], "marker.txt"))).toBe(true);
     expect(existsSync(join(handle.workspaceDir, "marker.txt"))).toBe(false);
     // The fresh copy is the baseline revision plus the extracted patch.
-    expect(readFileSync(join(handle.taskDir, dirs[0], "a.txt"), "utf8")).toBe("two\n");
+    // (git checkout may normalize line endings per core.autocrlf on Windows.)
+    expect(readFileSync(join(handle.taskDir, dirs[0], "a.txt"), "utf8").replace(/\r\n/g, "\n"))
+      .toBe("two\n");
     // ...and it is not wired to the protected project: nothing can push from here.
     expect(execFileSync("git", ["remote", "-v"],
       { cwd: join(handle.taskDir, dirs[0]), stdio: "pipe" }).toString().trim()).toBe("");
