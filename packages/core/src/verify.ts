@@ -4,8 +4,13 @@
 // Ideas ported from packages/bench/src/verify.ts (which core must not import
 // — bench depends on core) with one fix: timeouts kill the whole process
 // tree (killProcessTree), not just the direct child.
-import { analyzeShell } from "@tinystrap/policy";
+import { createHash } from "node:crypto";
+import { mkdtempSync } from "node:fs";
+import { join } from "node:path";
+import { analyzeShell, makeEvent, type HarnessEvent } from "@tinystrap/policy";
 import { defaultCommandRunner, type CommandRunner } from "./run.js";
+import type { Baseline } from "./snapshot-git.js";
+import type { TaskHandle } from "./taskstore.js";
 import type { VerifyCommand } from "./verify-commands.js";
 
 export const DEFAULT_VERIFY_TIMEOUT_MS = 120_000;
@@ -81,4 +86,90 @@ export async function runVerifyCommand(
     outputTail: tail(combined + note, cap),
     durationMs: Date.now() - started,
   };
+}
+
+export type VerifyReport = {
+  taskId: string;
+  passed: boolean;
+  patchHash: string;
+  apply: { ok: boolean; outputTail: string };
+  results: VerifyCommandResult[];
+  startedAt: string;
+  finishedAt: string;
+};
+
+export type VerifyOptions = {
+  timeoutMs?: number;
+  outputTailChars?: number;
+  runner?: CommandRunner;
+  onEvent?: (e: HarnessEvent) => void;
+};
+
+// Spec 9.9 + 9.2: the verifier workspace is a fresh checkout of the SAME
+// baseline the model started from — a clone of the source repo's committed
+// objects at the baseline revision (immune to later drift of the user's
+// working tree; the patch itself carries baseline tracked/untracked changes,
+// since extractPatch diffs the workspace against the revision). The model's
+// workspace directory is never read here, only its extracted patch.
+export async function verifyInFreshWorkspace(
+  handle: TaskHandle,
+  baseline: Baseline,
+  patch: string,
+  commands: VerifyCommand[],
+  opts: VerifyOptions = {},
+): Promise<VerifyReport> {
+  if (!baseline.revision.startsWith("git:")) {
+    throw new Error(
+      "verification needs a git project: this task has a manifest baseline and " +
+      "manifest-baseline verification is not implemented yet (run `git init` in the " +
+      "project and create a new task).");
+  }
+  const rev = baseline.revision.replace(/^git:/, "");
+  const runner = opts.runner ?? defaultCommandRunner;
+  const cap = opts.outputTailChars ?? DEFAULT_OUTPUT_TAIL_CHARS;
+  const startedAt = new Date().toISOString();
+  opts.onEvent?.(makeEvent(handle.taskId, "verification_started",
+    { reason: `${commands.length} commands` }));
+
+  const fresh = mkdtempSync(join(handle.taskDir, "verify-"));
+  const clone = await runner("git", ["clone", "--no-hardlinks", baseline.sourceRoot, fresh],
+    { cwd: handle.taskDir, timeoutMs: 120_000 });
+  if (clone.code !== 0) {
+    throw new Error(`verifier could not clone the baseline source: ${clone.stderr || clone.stdout}`);
+  }
+  const checkout = await runner("git", ["checkout", "--detach", rev],
+    { cwd: fresh, timeoutMs: 60_000 });
+  if (checkout.code !== 0) {
+    throw new Error(
+      `verifier could not check out the baseline revision: ${checkout.stderr || checkout.stdout}`);
+  }
+  // Detached from the protected project: nothing the verifier runs can reach
+  // a remote from here, and nothing can write to the user's working tree.
+  await runner("git", ["remote", "remove", "origin"], { cwd: fresh, timeoutMs: 30_000 });
+
+  const patchHash = `sha256:${createHash("sha256").update(patch).digest("hex")}`;
+  let apply: VerifyReport["apply"] = { ok: true, outputTail: "" };
+  if (patch.trim() !== "") {
+    const applied = await runner("git", ["apply", "--whitespace=nowarn", "-"],
+      { cwd: fresh, stdin: patch, timeoutMs: 60_000 });
+    apply = { ok: applied.code === 0, outputTail: tail(applied.stdout + applied.stderr, cap) };
+  }
+
+  const results: VerifyCommandResult[] = [];
+  if (apply.ok) {
+    for (const cmd of commands) {
+      results.push(await runVerifyCommand(cmd, fresh, opts));
+    }
+  }
+  // "nothing ran" must never read as "verified": hence results.length > 0.
+  const passed = apply.ok && results.length > 0
+    && results.every((r) => r.exitCode === 0 && !r.timedOut);
+  const report: VerifyReport = {
+    taskId: handle.taskId, passed, patchHash, apply, results,
+    startedAt, finishedAt: new Date().toISOString(),
+  };
+  opts.onEvent?.(makeEvent(handle.taskId, "verification_finished",
+    { decision: passed ? "pass" : "fail",
+      reason: `apply=${apply.ok} checks=${results.length}` }));
+  return report;
 }
