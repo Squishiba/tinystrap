@@ -1,0 +1,9 @@
+{
+  "id": "ts-interval-merge",
+  "kind": "coding",
+  "language": "typescript",
+  "prompt": "intervals.js/merge(intervals) must collapse overlapping or touching [start, end] pairs into the smallest set of pairs sorted by start, e.g. [[1,3],[2,6],[8,10],[10,11]] becomes [[1,6],[8,11]]. It gets nested intervals wrong: a fully contained interval shrinks the pair that contains it. Fix it. Keep the exported name and do not modify the caller's array.",
+  "verify": "node --test intervals.test.mjs",
+  "expected": "resolved",
+  "timeoutMs": 300000
+}
