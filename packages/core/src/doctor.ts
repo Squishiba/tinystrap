@@ -1,10 +1,17 @@
 import type { Discovery } from "@tinystrap/discovery";
 import { loadConfig, type ResolvedConfig } from "./config.js";
 
+export type DoctorExtra = {
+  // The CLI injects this (it wraps proxy's selectProfile). `core` must NOT import
+  // @tinystrap/proxy at runtime, so the resolver arrives as a callback.
+  resolveProfile?: (modelId: string) => string | undefined;
+};
+
 export async function runDoctor(
   projectRoot: string,
   discovery: Discovery,
   cliFlags?: Record<string, unknown>,
+  extra?: DoctorExtra,
 ): Promise<string> {
   let discovered;
   let discoveryError: string | undefined;
@@ -32,6 +39,22 @@ export async function runDoctor(
     }
   } else {
     lines.push("no servers discovered");
+  }
+  // Spec section 8/14: a failed probe must say which endpoints were tried and what
+  // each returned. Only rendered when discovery reported attempts, so the output of
+  // every existing doctor call is byte-identical to before.
+  if (discovered?.attempts && discovered.attempts.length > 0) {
+    lines.push("probe attempts:");
+    for (const a of discovered.attempts) {
+      lines.push(`  ${a.outcome}  ${a.url}  (${a.status ?? a.detail ?? "-"})`);
+    }
+  }
+  const model = discovered?.selectedModel
+    ?? config["server.model"]?.value;
+  if (extra?.resolveProfile && typeof model === "string") {
+    const name = extra.resolveProfile(model);
+    // Spec section 12.1: doctor shows the selected profile and why.
+    if (name) lines.push(`profile = ${name}   (profile)`);
   }
   return lines.join("\n");
 }
