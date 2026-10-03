@@ -1,0 +1,9 @@
+{
+  "id": "py-order-report",
+  "kind": "coding",
+  "language": "python",
+  "prompt": "report.py/summarize(orders) returns the wrong pairs. It must return (customer, total) pairs ranked by total descending, with ties broken by customer name A-Z, where a customer's total adds up price * qty for every order line that is not cancelled. Fix it. Keep the function names and the two-module layout: totals.py owns order_total, report.py owns summarize.",
+  "verify": "python -m pytest -q",
+  "expected": "resolved",
+  "timeoutMs": 300000
+}
