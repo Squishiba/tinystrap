@@ -17,3 +17,4 @@ export * from "./verify.js";
 export * from "./init-toml.js";
 export * from "./init-write.js";
 export * from "./promotion.js";
+export * from "./prompt.js";
