@@ -14,3 +14,4 @@ export * from "./verify-commands.js";
 export * from "./workspace.js";
 export * from "./run.js";
 export * from "./verify.js";
+export * from "./init-toml.js";
