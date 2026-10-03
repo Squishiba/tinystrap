@@ -28,8 +28,15 @@ export function writeInitConfig(opts: {
   // merging) is also what keeps a user's comments intact: no existing file is ever
   // parsed and re-emitted, because smol-toml cannot carry comments through a
   // round trip.
-  if (existsSync(path) && !opts.force) throw new ConfigExistsError(path);
+  // "wx" makes the kernel refuse an existing file atomically, so a file created
+  // between an existsSync check and the write can't be silently clobbered.
   const existed = existsSync(path);
-  writeFileSync(path, renderInitToml(opts.values), "utf8");
-  return { path, created: !existed, overwritten: existed };
+  try {
+    writeFileSync(path, renderInitToml(opts.values),
+      { encoding: "utf8", flag: opts.force ? "w" : "wx" });
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "EEXIST") throw new ConfigExistsError(path);
+    throw err;
+  }
+  return { path, created: !existed, overwritten: existed && Boolean(opts.force) };
 }
