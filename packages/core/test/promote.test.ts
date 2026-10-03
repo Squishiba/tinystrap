@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
-  createTask, promote, snapshotGit, type ApproveIO, type VerifyReport,
+  createTask, promote, snapshotGit,
+  type ApproveIO, type CommandRunner, type RunResult, type VerifyReport,
 } from "@tinystrap/core";
 
 const PATCH = [
@@ -97,5 +98,47 @@ describe("promote", () => {
       report: passingReport(handle.taskId), mode: "apply", io: io_ });
     expect(io_.printed.join("\n")).toMatch(/a\.txt/);       // git apply --stat output
     expect(io_.printed.join("\n")).toMatch(/verified|PASS/i);
+  });
+});
+
+describe("promote open_pr approval strictness (spec 9.10 hard rules)", () => {
+  it("assumeYes does NOT approve a push; the prompt still runs", async () => {
+    const { root, handle, baseline } = await snapshotProject();
+    const io_ = io("n");
+    const r = await promote({ handle, baseline, projectRoot: root, patch: PATCH,
+      report: passingReport(handle.taskId), mode: "open_pr", io: io_, assumeYes: true });
+    expect(r).toMatchObject({ status: "refused", reason: "approval_denied" });
+    expect(io_.asked.join("\n")).toMatch(/Push branch tinystrap\/task-/);
+  });
+
+  it("an approved open_pr prompt pushes the named branch via the runner only", async () => {
+    const { root, handle, baseline } = await snapshotProject();
+    const calls: Array<{ cmd: string; args: string[] }> = [];
+    // Fake runner: no network, no real gh. It answers the two reads the drift
+    // check makes (rev-parse HEAD, diff HEAD) with the baseline state, fails
+    // the branch-existence probe the way git does for a branch that does not
+    // exist yet, and plays the remote and gh along.
+    const sha = baseline.revision.replace(/^git:/, "");
+    const ok = (stdout = ""): RunResult => ({ code: 0, stdout, stderr: "", timedOut: false });
+    const runner: CommandRunner = async (cmd, args) => {
+      const key = `${cmd} ${args.join(" ")}`;
+      calls.push({ cmd, args });
+      if (key.includes("rev-parse --verify")) return { ...ok(), code: 1 };   // branch is new
+      if (key.includes("rev-parse HEAD")) return ok(`${sha}\n`);
+      if (key.includes("remote get-url")) return ok("https://example.invalid/acme/project.git\n");
+      if (key.includes("pr create")) return ok("https://example.invalid/acme/project/pull/1\n");
+      return ok();
+    };
+    const r = await promote({ handle, baseline, projectRoot: root, patch: PATCH,
+      report: passingReport(handle.taskId), mode: "open_pr", io: io("y"), runner });
+    expect(r).toMatchObject({ status: "pr_opened",
+      prUrl: "https://example.invalid/acme/project/pull/1" });
+    const push = calls.find((c) => c.args[0] === "push");
+    expect(push?.args).toEqual(["push", "origin",
+      `tinystrap/${handle.taskId}:tinystrap/${handle.taskId}`]);
+    for (const c of calls) {
+      expect(c.args).not.toContain("--force");
+      expect(c.args).not.toContain("-f");
+    }
   });
 });
