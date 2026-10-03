@@ -44,6 +44,12 @@ importers:
       '@tinystrap/discovery':
         specifier: workspace:*
         version: link:../../packages/discovery
+      '@tinystrap/policy':
+        specifier: workspace:*
+        version: link:../../packages/policy
+      '@tinystrap/proxy':
+        specifier: workspace:*
+        version: link:../../packages/proxy
 
   packages/bench:
     dependencies:
