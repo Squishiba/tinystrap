@@ -68,6 +68,10 @@ importers:
       smol-toml:
         specifier: ^1.3.0
         version: 1.8.0
+    devDependencies:
+      '@tinystrap/proxy':
+        specifier: workspace:*
+        version: link:../proxy
 
   packages/discovery: {}
 
