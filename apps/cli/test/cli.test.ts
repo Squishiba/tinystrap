@@ -112,3 +112,93 @@ describe("formatVerifyReport", () => {
     expect(text).toContain("error: patch does not apply");
   });
 });
+
+// The whole approve surface, injected: the CLI promote path never touches a
+// TTY, so these tests would hang rather than fail if it tried.
+function fakeIo(answer: string, asked: string[] = []) {
+  return { out: () => {}, ask: async (q: string) => { asked.push(q); return answer; } };
+}
+
+describe("task promote", () => {
+  it("apply mode promotes a verified patch after an interactive y", async () => {
+    const { dir, id } = await verifiedProject();
+    writeFileSync(workspaceFile(dir, id, "a.txt"), "two\n");
+    const asked: string[] = [];
+    const out = await runCli(["task", "promote", id, "--cwd", dir], undefined, fakeIo("y", asked));
+    expect(out).toContain("applied");
+    expect(asked.join("")).toMatch(/Apply this patch/);
+    expect(read(join(dir, "a.txt"))).toBe("two\n");
+  }, 60_000);
+
+  it("--yes approves apply without asking", async () => {
+    const { dir, id } = await verifiedProject();
+    writeFileSync(workspaceFile(dir, id, "a.txt"), "two\n");
+    const out = await runCli(["task", "promote", id, "--cwd", dir, "--yes"], undefined,
+      { out: () => {}, ask: async () => { throw new Error("must not ask"); } });
+    expect(out).toContain("applied");
+    expect(read(join(dir, "a.txt"))).toBe("two\n");
+  }, 60_000);
+
+  it("export_patch needs no approval and writes the patch file", async () => {
+    const { dir, id } = await verifiedProject();
+    writeFileSync(workspaceFile(dir, id, "a.txt"), "two\n");
+    const out = await runCli(["task", "promote", id, "--cwd", dir, "--mode", "export_patch"],
+      undefined, { out: () => {}, ask: async () => { throw new Error("must not ask"); } });
+    expect(out).toContain("exported");
+    expect(read(join(dir, `${id}.patch`))).toMatch(/\+two/);
+    expect(read(join(dir, "a.txt"))).toBe("one\n");   // the project itself is untouched
+  }, 60_000);
+
+  it("open_pr requires the repository opt-in in tinystrap.toml", async () => {
+    const { dir, id } = await verifiedProject();
+    writeFileSync(workspaceFile(dir, id, "a.txt"), "two\n");
+    await expect(runCli(["task", "promote", id, "--cwd", dir, "--mode", "open_pr"], undefined,
+      fakeIo("y"))).rejects.toThrow(/promotion\.mode = "open_pr"/);
+    expect(read(join(dir, "a.txt"))).toBe("one\n");
+  }, 60_000);
+
+  it("--yes never satisfies an open_pr approval, and the prompt names the branch", async () => {
+    const { dir, id } = await verifiedProject({ promotionMode: "open_pr" });
+    writeFileSync(workspaceFile(dir, id, "a.txt"), "two\n");
+    const asked: string[] = [];
+    const err = await runCli(
+      ["task", "promote", id, "--cwd", dir, "--mode", "open_pr", "--yes"],
+      undefined, fakeIo("n", asked)).catch((e) => e as Error);
+    expect(asked.join("")).toContain(`Push branch tinystrap/${id}`);
+    expect((err as Error).message).toMatch(/declined/);
+    expect(read(join(dir, "a.txt"))).toBe("one\n");
+    // Nothing reached the repository either: no task branch was created and the
+    // project has no origin remote, so a push was never even possible.
+    expect(existsSync(join(dir, ".git", "refs", "heads", "tinystrap"))).toBe(false);
+  }, 60_000);
+
+  it("a declined promote is refused without touching the project", async () => {
+    const { dir, id } = await verifiedProject();
+    writeFileSync(workspaceFile(dir, id, "a.txt"), "two\n");
+    await expect(runCli(["task", "promote", id, "--cwd", dir], undefined, fakeIo("n")))
+      .rejects.toThrow(/declined/);
+    expect(read(join(dir, "a.txt"))).toBe("one\n");
+  }, 60_000);
+
+  it("will not promote a patch that does not verify", async () => {
+    const { dir, id } = await verifiedProject();
+    writeFileSync(workspaceFile(dir, id, "a.txt"), "wrong\n");
+    const err = await runCli(["task", "promote", id, "--cwd", dir], undefined,
+      { out: () => {}, ask: async () => { throw new Error("must not ask"); } })
+      .catch((e) => e as Error);
+    expect((err as Error).message).toMatch(/Promotion needs a passing verification/);
+    expect(read(join(dir, "a.txt"))).toBe("one\n");
+  }, 60_000);
+
+  it("refuses an unknown --mode instead of falling through to another mode", async () => {
+    const { dir, id } = await verifiedProject();
+    writeFileSync(workspaceFile(dir, id, "a.txt"), "two\n");
+    await expect(runCli(["task", "promote", id, "--cwd", dir, "--mode", "please"], undefined,
+      fakeIo("y"))).rejects.toThrow(/unknown promotion mode/);
+    expect(read(join(dir, "a.txt"))).toBe("one\n");
+  }, 60_000);
+
+  it("asks for the task id when none is given", async () => {
+    await expect(runCli(["task", "promote"])).rejects.toThrow(/usage/);
+  });
+});
