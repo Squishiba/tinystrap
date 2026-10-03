@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { createInterface } from "node:readline/promises";
 import {
   createTask, destroyTask, exportPatch, extractPatch, openTask, runDoctor,
   snapshotGit, isGitProject, snapshotManifest,
@@ -13,6 +14,19 @@ import {
   type VerifyCommand, type VerifyReport,
 } from "@tinystrap/core";
 import { Discovery, StubDiscovery } from "@tinystrap/discovery";
+import { runInit } from "./init.js";
+
+// The ONLY place this repo reads a terminal. Used by the `init` branch below
+// alone - `core` takes an injected PromptIO, and no test ever calls this.
+async function askOnTerminal(question: string): Promise<string> {
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  try { return (await rl.question(question)).trim(); } finally { rl.close(); }
+}
+
+// Set by the `init` branch only. `init` is the one command with an exit-code
+// contract (see flags.ts); every other branch keeps today's string return and the
+// existing throw-to-exit-1 behavior.
+let initExitCode: number | undefined;
 
 const PROMOTION_MODES: readonly PromotionMode[] =
   ["apply", "export_patch", "commit_task_branch", "open_pr"];
@@ -55,6 +69,18 @@ export async function runCli(
   const disc = discovery ?? new StubDiscovery({ servers: [] });
   if (argv[0] === "doctor") {
     return runDoctor(cwd, disc);
+  }
+  if (argv[0] === "init") {
+    const { code, output } = await runInit(argv.slice(1), {
+      io: {
+        out: (l) => process.stdout.write(l + "\n"),
+        err: (l) => process.stderr.write(l + "\n"),
+        ask: (q) => askOnTerminal(q),
+        isTty: Boolean(process.stdin.isTTY),
+      },
+    });
+    initExitCode = code;
+    return output;
   }
   if (argv[0] === "task" && argv[1] === "new") {
     const h = await createTask(cwd);
@@ -156,7 +182,12 @@ export async function runCli(
 const isEntry = process.argv[1]?.replace(/\\/g, "/").includes("apps/cli/src/main");
 if (isEntry) {
   runCli(process.argv.slice(2)).then(
-    (out) => console.log(out),
+    (out) => {
+      console.log(out);
+      // `init` is the only command that reports a code of its own; anything else
+      // that got here exited 0 as it always has.
+      if (initExitCode !== undefined) process.exitCode = initExitCode;
+    },
     (err) => { console.error(String(err.message ?? err)); process.exitCode = 1; },
   );
 }

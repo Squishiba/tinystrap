@@ -19,3 +19,4 @@ export * from "./init-write.js";
 export * from "./promotion.js";
 export * from "./prompt.js";
 export * from "./smoke.js";
+export * from "./instructions.js";
