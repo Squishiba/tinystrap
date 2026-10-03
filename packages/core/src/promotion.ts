@@ -188,3 +188,52 @@ export async function commitTaskBranch(
   }
   return { ok: true, commit: commit.stdout.trim() };
 }
+
+// open_pr (spec 9.10): the broker — never the model — pushes ONLY the task
+// branch and opens a PR. Guards live here so no caller can construct an
+// unsafe push by accident: protected names are refused before any process
+// runs; the push command is a fixed refspec with no force flag in the
+// vocabulary; gh runs only after a successful push. All remote contact goes
+// through the injected runner — production uses defaultCommandRunner, tests
+// use a recorder, CI never touches a network.
+export type OpenPrResult =
+  | { ok: true; branch: string; prUrl: string }
+  | { ok: false; stage: "branch" | "remote" | "push" | "pr"; error: string };
+
+export async function openPullRequest(
+  projectRoot: string,
+  handle: TaskHandle,
+  patch: string,
+  opts: { branch: string; base?: string; title?: string; body?: string;
+    runner?: CommandRunner },
+): Promise<OpenPrResult> {
+  const runner = opts.runner ?? defaultCommandRunner;
+  if (PROTECTED_BRANCHES.has(opts.branch)) {
+    return { ok: false, stage: "branch",
+      error: `refusing to push protected branch "${opts.branch}"` };
+  }
+  const committed = await commitTaskBranch(projectRoot, handle, patch, opts.branch, runner);
+  if (!committed.ok) return { ok: false, stage: "branch", error: committed.error };
+
+  const remote = await runner("git", ["remote", "get-url", "origin"],
+    { cwd: projectRoot, timeoutMs: 30_000 });
+  if (remote.code !== 0) {
+    return { ok: false, stage: "remote",
+      error: "the project has no origin remote to push to; configure one or use export_patch" };
+  }
+  const push = await runner("git", ["push", "origin",
+    `${opts.branch}:${opts.branch}`], { cwd: projectRoot, timeoutMs: 120_000 });
+  if (push.code !== 0) {
+    return { ok: false, stage: "push", error: `push failed: ${push.stderr || push.stdout}` };
+  }
+  const gh = await runner("gh", ["pr", "create",
+    "--head", opts.branch, "--base", opts.base ?? "main",
+    "--title", opts.title ?? `tinystrap: ${handle.taskId}`,
+    "--body", opts.body ?? `Verified task patch for ${handle.taskId}.`],
+    { cwd: projectRoot, timeoutMs: 120_000 });
+  if (gh.code !== 0) {
+    return { ok: false, stage: "pr", error: `gh pr create failed: ${gh.stderr || gh.stdout}` };
+  }
+  const prUrl = gh.stdout.trim().split("\n").find((l) => l.startsWith("http")) ?? "";
+  return { ok: true, branch: opts.branch, prUrl };
+}
