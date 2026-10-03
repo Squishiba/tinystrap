@@ -5,11 +5,16 @@
 import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { defaultCommandRunner, type CommandRunner } from "./run.js";
+import { defaultCommandRunner, type CommandRunner, type RunResult } from "./run.js";
 import { captureWorkspaceManifestHash, type Baseline } from "./snapshot-git.js";
 import type { TaskHandle } from "./taskstore.js";
 
 export type ProjectFingerprint = { revision: string; trackedChangesHash: string };
+
+// Identity for plumbing commits (open question 9): never the user's git
+// config, and a .invalid address so no real mailbox appears in a public repo.
+const HARNESS_IDENTITY = "tinystrap";
+const HARNESS_IDENTITY_EMAIL = "tinystrap@tinystrap.invalid";
 
 export async function computeProjectFingerprint(
   projectRoot: string,
@@ -119,4 +124,67 @@ export async function restoreFromCheckpoint(
     if (existsSync(saved)) copyFileSync(saved, target);
     else if (existsSync(target)) rmSync(target);
   }
+}
+
+export const PROTECTED_BRANCHES: ReadonlySet<string> = new Set(["main", "master"]);
+
+export type CommitBranchResult =
+  | { ok: true; commit: string }
+  | { ok: false; error: string };
+
+// Spec 9.10 step (3): apply ONLY the exact verified patch bytes, via stdin,
+// never a directory copy. git apply is atomic: a failed apply changes nothing.
+export async function applyPatchToProject(
+  projectRoot: string, patch: string, runner: CommandRunner = defaultCommandRunner,
+): Promise<RunResult> {
+  return runner("git", ["apply", "--whitespace=nowarn", "-"],
+    { cwd: projectRoot, stdin: patch, timeoutMs: 60_000 });
+}
+
+// commit_task_branch: pure git plumbing (temp index -> read-tree -> apply
+// --cached -> write-tree -> commit-tree -> update-ref). The user's working tree,
+// index, and HEAD are never touched, and no push happens. Harness identity
+// env keeps machines without a configured identity working (open question 9);
+// the user's own git config is never read for authorship or modified.
+export async function commitTaskBranch(
+  projectRoot: string,
+  handle: TaskHandle,
+  patch: string,
+  branch: string,
+  runner: CommandRunner = defaultCommandRunner,
+): Promise<CommitBranchResult> {
+  if (PROTECTED_BRANCHES.has(branch)) {
+    return { ok: false, error: `refusing to write to protected branch "${branch}"` };
+  }
+  const exists = await runner("git", ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`],
+    { cwd: projectRoot, timeoutMs: 30_000 });
+  if (exists.code === 0) {
+    return { ok: false, error: `branch "${branch}" already exists; refusing to move it` };
+  }
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    GIT_INDEX_FILE: join(handle.taskDir, "branch.index"),
+    GIT_AUTHOR_NAME: HARNESS_IDENTITY, GIT_AUTHOR_EMAIL: HARNESS_IDENTITY_EMAIL,
+    GIT_COMMITTER_NAME: HARNESS_IDENTITY, GIT_COMMITTER_EMAIL: HARNESS_IDENTITY_EMAIL,
+  };
+  const read = await runner("git", ["read-tree", "HEAD"], { cwd: projectRoot, env, timeoutMs: 60_000 });
+  if (read.code !== 0) return { ok: false, error: `read-tree failed: ${read.stderr || read.stdout}` };
+  const applied = await runner("git", ["apply", "--cached", "--whitespace=nowarn", "-"],
+    { cwd: projectRoot, env, stdin: patch, timeoutMs: 60_000 });
+  if (applied.code !== 0) {
+    return { ok: false, error: `patch does not apply to the project: ${applied.stderr || applied.stdout}` };
+  }
+  const tree = await runner("git", ["write-tree"], { cwd: projectRoot, env, timeoutMs: 60_000 });
+  if (tree.code !== 0) return { ok: false, error: `write-tree failed: ${tree.stderr || tree.stdout}` };
+  const commit = await runner("git", ["commit-tree", tree.stdout.trim(), "-m",
+    `tinystrap: verified task patch ${handle.taskId}`], { cwd: projectRoot, env, timeoutMs: 60_000 });
+  if (commit.code !== 0) {
+    return { ok: false, error: `commit-tree failed: ${commit.stderr || commit.stdout}` };
+  }
+  const ref = await runner("git", ["update-ref", `refs/heads/${branch}`, commit.stdout.trim()],
+    { cwd: projectRoot, env, timeoutMs: 30_000 });
+  if (ref.code !== 0) {
+    return { ok: false, error: `update-ref failed: ${ref.stderr || ref.stdout}` };
+  }
+  return { ok: true, commit: commit.stdout.trim() };
 }
