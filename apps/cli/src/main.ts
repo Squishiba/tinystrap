@@ -9,7 +9,8 @@ import {
 import {
   detectVerifyCommands, loadConfig, promote, resolveVerifyCommands,
   verifyInFreshWorkspace, verifyOverridesFromConfig,
-  type ApproveIO, type Baseline, type PromotionMode, type VerifyReport,
+  type ApproveIO, type Baseline, type PromotionMode, type ResolvedConfig,
+  type VerifyCommand, type VerifyReport,
 } from "@tinystrap/core";
 import { Discovery, StubDiscovery } from "@tinystrap/discovery";
 
@@ -24,8 +25,9 @@ function flagValue(argv: string[], flag: string, fallback: string): string {
 // Verify commands come from detection plus the [verify] config table, never
 // from free-form CLI text (spec 9.9): the CLI offers no "run this command"
 // flag at all.
-async function resolvedVerifyCommands(projectRoot: string) {
-  const config = await loadConfig({ projectRoot });
+function resolvedVerifyCommands(
+  projectRoot: string, config: ResolvedConfig,
+): VerifyCommand[] {
   return resolveVerifyCommands(
     detectVerifyCommands(projectRoot), verifyOverridesFromConfig(config));
 }
@@ -76,7 +78,7 @@ export async function runCli(
     const baseline = JSON.parse(readFileSync(h.baselinePath, "utf8")) as Baseline;
     const patch = await extractPatch(h);
     const report = await verifyInFreshWorkspace(h, baseline, patch,
-      await resolvedVerifyCommands(cwd));
+      resolvedVerifyCommands(cwd, await loadConfig({ projectRoot: cwd })));
     const text = formatVerifyReport(report);
     if (!report.passed) {
       throw new Error(`${text}\nThe patch did not pass verification. Fix the task and re-run, `
@@ -109,8 +111,7 @@ export async function runCli(
         + "in tinystrap.toml");
     }
     const patch = await extractPatch(h);
-    const commands = resolveVerifyCommands(
-      detectVerifyCommands(cwd), verifyOverridesFromConfig(config));
+    const commands = resolvedVerifyCommands(cwd, config);
     const report = await verifyInFreshWorkspace(h, baseline, patch, commands);
     if (!report.passed) {
       throw new Error(`${formatVerifyReport(report)}\n`
