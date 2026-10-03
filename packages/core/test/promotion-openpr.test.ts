@@ -45,6 +45,26 @@ describe("openPullRequest", () => {
     expect(calls).toHaveLength(0);
   });
 
+  it("refuses every spelling of a protected branch, before running anything", async () => {
+    for (const bad of ["refs/heads/main", "MAIN", "Master", "refs/heads/master"]) {
+      const { runner, calls } = fakeRunner({});
+      const r = await openPullRequest("/w/project", await handle(), "patch",
+        { branch: bad, runner });
+      expect(r.ok).toBe(false);
+      expect(calls).toHaveLength(0);
+    }
+  });
+
+  it("refuses refspec syntax that would force or rewrite the push", async () => {
+    for (const bad of ["+feature", "x:main", "refs/heads/x", "a..b", "feat/"]) {
+      const { runner, calls } = fakeRunner({});
+      const r = await openPullRequest("/w/project", await handle(), "patch",
+        { branch: bad, runner });
+      expect(r).toMatchObject({ ok: false, stage: "branch" });
+      expect(calls).toHaveLength(0);
+    }
+  });
+
   it("refuses when the project has no origin remote", async () => {
     const { runner, calls } = fakeRunner({ "remote get-url": { code: 2, stderr: "no such remote" } });
     const r = await openPullRequest("/w/project", await handle(), "patch",
@@ -63,7 +83,8 @@ describe("openPullRequest", () => {
     expect(r).toEqual({ ok: true, branch: "tinystrap/task-0001",
       prUrl: "https://example.invalid/acme/project/pull/7" });
     const push = calls.find((c) => c.args[0] === "push");
-    expect(push?.args).toEqual(["push", "origin", "tinystrap/task-0001:tinystrap/task-0001"]);
+    expect(push?.args).toEqual(["push", "origin",
+      "refs/heads/tinystrap/task-0001:refs/heads/tinystrap/task-0001"]);
     for (const c of calls) {
       expect(c.args).not.toContain("--force");
       expect(c.args).not.toContain("-f");

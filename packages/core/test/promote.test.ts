@@ -136,7 +136,7 @@ describe("promote open_pr approval strictness (spec 9.10 hard rules)", () => {
       prUrl: "https://example.invalid/acme/project/pull/1" });
     const push = calls.find((c) => c.args[0] === "push");
     expect(push?.args).toEqual(["push", "origin",
-      `tinystrap/${handle.taskId}:tinystrap/${handle.taskId}`]);
+      `refs/heads/tinystrap/${handle.taskId}:refs/heads/tinystrap/${handle.taskId}`]);
     for (const c of calls) {
       expect(c.args).not.toContain("--force");
       expect(c.args).not.toContain("-f");

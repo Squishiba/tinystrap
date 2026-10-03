@@ -131,6 +131,25 @@ export async function restoreFromCheckpoint(
 
 export const PROTECTED_BRANCHES: ReadonlySet<string> = new Set(["main", "master"]);
 
+// The guard is on the NAME, not the string as typed: a branch of "refs/heads/main"
+// or "MAIN" reaches the same protected ref, and a leading "+" or a ":" turns the
+// push refspec into a force push or a rewritten destination. So the allowed shape
+// is a plain ref name, and protected names are refused after normalising both
+// case and the refs/heads/ prefix. Returns an error message, or null when safe.
+const TASK_BRANCH_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
+export function validateTaskBranch(branch: string): string | null {
+  if (!TASK_BRANCH_PATTERN.test(branch) || branch.includes("..") || branch.endsWith("/")
+    || branch.startsWith("refs/")) {
+    return `invalid task branch name "${branch}": use letters, digits, . _ / - and do not ` +
+      "start with a symbol or refs/";
+  }
+  const short = branch.replace(/^refs\/heads\//, "").toLowerCase();
+  if (PROTECTED_BRANCHES.has(branch.toLowerCase()) || PROTECTED_BRANCHES.has(short)) {
+    return `refusing to write to protected branch "${branch}"`;
+  }
+  return null;
+}
+
 export type CommitBranchResult =
   | { ok: true; commit: string }
   | { ok: false; error: string };
@@ -156,9 +175,8 @@ export async function commitTaskBranch(
   branch: string,
   runner: CommandRunner = defaultCommandRunner,
 ): Promise<CommitBranchResult> {
-  if (PROTECTED_BRANCHES.has(branch)) {
-    return { ok: false, error: `refusing to write to protected branch "${branch}"` };
-  }
+  const invalid = validateTaskBranch(branch);
+  if (invalid) return { ok: false, error: invalid };
   const exists = await runner("git", ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`],
     { cwd: projectRoot, timeoutMs: 30_000 });
   if (exists.code === 0) {
@@ -211,10 +229,8 @@ export async function openPullRequest(
     runner?: CommandRunner },
 ): Promise<OpenPrResult> {
   const runner = opts.runner ?? defaultCommandRunner;
-  if (PROTECTED_BRANCHES.has(opts.branch)) {
-    return { ok: false, stage: "branch",
-      error: `refusing to push protected branch "${opts.branch}"` };
-  }
+  const invalid = validateTaskBranch(opts.branch);
+  if (invalid) return { ok: false, stage: "branch", error: invalid };
   const committed = await commitTaskBranch(projectRoot, handle, patch, opts.branch, runner);
   if (!committed.ok) return { ok: false, stage: "branch", error: committed.error };
 
@@ -224,8 +240,9 @@ export async function openPullRequest(
     return { ok: false, stage: "remote",
       error: "the project has no origin remote to push to; configure one or use export_patch" };
   }
+  // Fully qualified refspec: the destination can only ever be refs/heads/<branch>.
   const push = await runner("git", ["push", "origin",
-    `${opts.branch}:${opts.branch}`], { cwd: projectRoot, timeoutMs: 120_000 });
+    `refs/heads/${opts.branch}:refs/heads/${opts.branch}`], { cwd: projectRoot, timeoutMs: 120_000 });
   if (push.code !== 0) {
     return { ok: false, stage: "push", error: `push failed: ${push.stderr || push.stdout}` };
   }
@@ -297,13 +314,21 @@ export async function promote(req: PromotionRequest): Promise<PromotionOutcome> 
       "export the patch for a human: tinystrap task export " + req.handle.taskId);
   }
 
-  // export_patch touches nothing outside the task dir: no approval (open question 7).
+  // export_patch writes the patch into the project root without asking (open
+  // question 7). That is a file write into the protected project, not "no side
+  // effects": it is deliberate, but it is a side effect and should be revisited.
   if (req.mode === "export_patch") {
     const destPath = join(req.projectRoot, `${req.handle.taskId}.patch`);
     writeFileSync(destPath, req.patch);
     req.onEvent?.(makeEvent(req.handle.taskId, "promotion_applied",
       { decision: "export_patch", reason: destPath }));
     return { status: "exported", destPath };
+  }
+
+  // Refuse a bad branch before asking, so nobody approves a push that can't happen.
+  if (req.mode === "open_pr" || req.mode === "commit_task_branch") {
+    const invalid = validateTaskBranch(branch);
+    if (invalid) return refuse("error", invalid);
   }
 
   // Show the diff (stat form) + the verification report, then one-key approve
