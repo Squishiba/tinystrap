@@ -28,7 +28,8 @@ describe("applyPatchToProject", () => {
     const root = gitProject();
     const r = await applyPatchToProject(root, PATCH);
     expect(r.code).toBe(0);
-    expect(readFileSync(join(root, "a.txt"), "utf8")).toBe("two\n");
+    // git apply may normalize line endings per core.autocrlf on Windows.
+    expect(readFileSync(join(root, "a.txt"), "utf8").replace(/\r\n/g, "\n")).toBe("two\n");
   });
 });
 
@@ -43,7 +44,7 @@ describe("commitTaskBranch", () => {
     // branch exists and carries the change:
     const shown = execFileSync("git", ["show", "tinystrap/task-0001:a.txt"],
       { cwd: root, encoding: "utf8" });
-    expect(shown).toBe("two\n");
+    expect(shown.replace(/\r\n/g, "\n")).toBe("two\n");
   });
 
   it("refuses protected branch names", async () => {

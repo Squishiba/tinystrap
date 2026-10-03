@@ -67,7 +67,8 @@ describe("promote", () => {
       report: passingReport(handle.taskId), mode: "apply", io: io("y"),
       onEvent: (e) => events.push(e.kind) });
     expect(r).toMatchObject({ status: "applied", postApplyPassed: null });
-    expect(readFileSync(join(root, "a.txt"), "utf8")).toBe("two\n");
+    // git apply may normalize line endings per core.autocrlf on Windows.
+    expect(readFileSync(join(root, "a.txt"), "utf8").replace(/\r\n/g, "\n")).toBe("two\n");
     expect(events).toEqual(["promotion_requested", "promotion_applied"]);
   });
 

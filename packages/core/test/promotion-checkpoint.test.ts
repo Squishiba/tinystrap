@@ -49,7 +49,8 @@ describe("rollback checkpoint", () => {
 
     execFileSync("git", ["apply", "--whitespace=nowarn", "-"],
       { cwd: root, input: patch, stdio: ["pipe", "pipe", "pipe"] });
-    expect(readFileSync(join(root, "a.txt"), "utf8")).toBe("two\n");
+    // git apply may normalize line endings per core.autocrlf on Windows.
+    expect(readFileSync(join(root, "a.txt"), "utf8").replace(/\r\n/g, "\n")).toBe("two\n");
     expect(existsSync(join(root, "c.txt"))).toBe(true);
 
     await restoreFromCheckpoint(root, ckpt);
