@@ -3,11 +3,14 @@
 // Every git/gh invocation goes through the injectable CommandRunner so tests
 // fake the remote-facing half entirely (no network, no real gh in CI).
 import { createHash } from "node:crypto";
+import { makeEvent, type HarnessEvent } from "@tinystrap/policy";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { defaultCommandRunner, type CommandRunner, type RunResult } from "./run.js";
 import { captureWorkspaceManifestHash, type Baseline } from "./snapshot-git.js";
 import type { TaskHandle } from "./taskstore.js";
+import { runVerifyCommand, type VerifyReport } from "./verify.js";
+import type { VerifyCommand } from "./verify-commands.js";
 
 export type ProjectFingerprint = { revision: string; trackedChangesHash: string };
 
@@ -236,4 +239,148 @@ export async function openPullRequest(
   }
   const prUrl = gh.stdout.trim().split("\n").find((l) => l.startsWith("http")) ?? "";
   return { ok: true, branch: opts.branch, prUrl };
+}
+
+export type PromotionMode = "apply" | "export_patch" | "commit_task_branch" | "open_pr";
+
+// One-key approve with injected IO (same pattern as the init prompts): no
+// readline, no TTY in tests. "y" (case-insensitive, trimmed) is the only
+// affirmative; anything else is a denial — fail-safe by default.
+export type ApproveIO = {
+  out: (line: string) => void;
+  ask: (question: string) => Promise<string>;
+};
+
+export type PromotionRequest = {
+  handle: TaskHandle;
+  baseline: Baseline;
+  projectRoot: string;
+  patch: string;
+  report: VerifyReport;
+  mode: PromotionMode;
+  io: ApproveIO;
+  runner?: CommandRunner;
+  branch?: string;                       // default `tinystrap/<taskId>`
+  prTitle?: string;
+  prBody?: string;
+  assumeYes?: boolean;                   // never satisfies open_pr (open question 4)
+  postApplyCommands?: VerifyCommand[];   // default []; the CLI passes the resolved set
+                                         // when promotion.postApplyVerify is true (oq 5)
+  onEvent?: (e: HarnessEvent) => void;
+};
+
+export type PromotionOutcome =
+  | { status: "applied"; checkpointDir: string; postApplyPassed: boolean | null }
+  | { status: "exported"; destPath: string }
+  | { status: "branch_committed"; branch: string; commit: string }
+  | { status: "pr_opened"; branch: string; prUrl: string }
+  | { status: "refused"; reason:
+      "not_verified" | "approval_denied" | "drift" | "apply_failed" | "push_failed" | "error";
+    message: string };
+
+function isApproved(answer: string): boolean {
+  return answer.trim().toLowerCase() === "y";
+}
+
+export async function promote(req: PromotionRequest): Promise<PromotionOutcome> {
+  const runner = req.runner ?? defaultCommandRunner;
+  const branch = req.branch ?? `tinystrap/${req.handle.taskId}`;
+  const refuse = (reason: Extract<PromotionOutcome, { status: "refused" }>["reason"],
+    message: string): PromotionOutcome => {
+    req.onEvent?.(makeEvent(req.handle.taskId, "promotion_refused", { reason }));
+    return { status: "refused", reason, message };
+  };
+
+  if (!req.report.passed) {
+    return refuse("not_verified",
+      "the patch did not pass verification, so nothing was promoted. Re-run the task, or " +
+      "export the patch for a human: tinystrap task export " + req.handle.taskId);
+  }
+
+  // export_patch touches nothing outside the task dir: no approval (open question 7).
+  if (req.mode === "export_patch") {
+    const destPath = join(req.projectRoot, `${req.handle.taskId}.patch`);
+    writeFileSync(destPath, req.patch);
+    req.onEvent?.(makeEvent(req.handle.taskId, "promotion_applied",
+      { decision: "export_patch", reason: destPath }));
+    return { status: "exported", destPath };
+  }
+
+  // Show the diff (stat form) + the verification report, then one-key approve
+  // (spec 9.10). For open_pr the prompt MUST name the branch that will be
+  // pushed; --yes never satisfies a push (open question 4).
+  const stat = await runner("git", ["apply", "--stat", "-"],
+    { cwd: req.projectRoot, stdin: req.patch, timeoutMs: 30_000 });
+  req.io.out(`Patch to promote (${req.mode}), verified ${req.report.patchHash.slice(0, 18)}…:`);
+  req.io.out(stat.stdout.trim() || "(no stat available)");
+  req.io.out(`Verification: ${req.report.results
+    .map((r) => `${r.name}=${r.exitCode === 0 && !r.timedOut ? "PASS" : "FAIL"}`).join(" ")}`);
+
+  const question = req.mode === "open_pr"
+    ? `Push branch ${branch} to origin and open a pull request against main? [y/N] `
+    : req.mode === "commit_task_branch"
+      ? `Commit this patch to new branch ${branch} (no push)? [y/N] `
+      : "Apply this patch to your project? [y/N] ";
+  req.onEvent?.(makeEvent(req.handle.taskId, "promotion_requested",
+    { decision: req.mode, reason: `branch=${branch}` }));
+
+  const approved = req.mode === "open_pr"
+    ? isApproved(await req.io.ask(question))                 // interactive only, always
+    : (req.assumeYes === true || isApproved(await req.io.ask(question)));
+  if (!approved) {
+    return refuse("approval_denied", "you declined; nothing was changed. The verified patch is " +
+      `still available: tinystrap task export ${req.handle.taskId}`);
+  }
+
+  const drift = await checkDrift(req.projectRoot, req.baseline, runner);
+  if (drift.drifted) {
+    return refuse("drift", `promotion stopped: ${drift.detail}`);
+  }
+
+  if (req.mode === "apply") {
+    // The exact bytes that were verified — never a re-extraction, never a
+    // directory copy (spec 9.10).
+    const checkpointDir = await createRollbackCheckpoint(req.projectRoot, req.handle, req.patch, runner);
+    const applied = await applyPatchToProject(req.projectRoot, req.patch, runner);
+    if (applied.code !== 0) {
+      return refuse("apply_failed", "the verified patch did not apply cleanly; nothing was " +
+        `changed. Export it for review: tinystrap task export ${req.handle.taskId}`);
+    }
+    let postApplyPassed: boolean | null = null;
+    const post = req.postApplyCommands ?? [];
+    if (post.length > 0) {
+      postApplyPassed = true;
+      for (const cmd of post) {
+        const r = await runVerifyCommand(cmd, req.projectRoot, { runner });
+        if (r.exitCode !== 0 || r.timedOut) { postApplyPassed = false; break; }
+      }
+      if (!postApplyPassed) {
+        await restoreFromCheckpoint(req.projectRoot, checkpointDir, runner);
+        return refuse("apply_failed", "post-apply checks failed, so the project was restored " +
+          "to its pre-promotion state. Export the patch and inspect the check output.");
+      }
+    }
+    req.onEvent?.(makeEvent(req.handle.taskId, "promotion_applied", { decision: "apply" }));
+    return { status: "applied", checkpointDir, postApplyPassed };
+  }
+
+  if (req.mode === "commit_task_branch") {
+    const committed = await commitTaskBranch(req.projectRoot, req.handle, req.patch, branch, runner);
+    if (!committed.ok) {
+      return refuse("error", `could not create the task branch: ${committed.error}`);
+    }
+    req.onEvent?.(makeEvent(req.handle.taskId, "promotion_applied",
+      { decision: "commit_task_branch", reason: branch }));
+    return { status: "branch_committed", branch, commit: committed.commit };
+  }
+
+  // open_pr — reached only through the interactive approve above.
+  const pr = await openPullRequest(req.projectRoot, req.handle, req.patch,
+    { branch, title: req.prTitle, body: req.prBody, runner });
+  if (!pr.ok) {
+    return refuse(pr.stage === "push" ? "push_failed" : "error", pr.error);
+  }
+  req.onEvent?.(makeEvent(req.handle.taskId, "promotion_applied",
+    { decision: "open_pr", reason: pr.prUrl }));
+  return { status: "pr_opened", branch: pr.branch, prUrl: pr.prUrl };
 }
