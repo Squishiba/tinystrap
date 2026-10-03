@@ -1,0 +1,9 @@
+{
+  "id": "py-settings-bool",
+  "kind": "coding",
+  "language": "python",
+  "prompt": "settings.py/to_bool('false') returns True, so a setting switched off in the settings file reads as switched on. Follow the rules in the function's own docstring exactly, including what happens to a word that is in neither list. Keep the function name and the two word lists.",
+  "verify": "python -m pytest -q",
+  "expected": "resolved",
+  "timeoutMs": 300000
+}

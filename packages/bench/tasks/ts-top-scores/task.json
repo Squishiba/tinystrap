@@ -1,0 +1,9 @@
+{
+  "id": "ts-top-scores",
+  "kind": "coding",
+  "language": "typescript",
+  "prompt": "scores.js/topScores(scores, n) returns the right ranking but sorts the caller's array in place, corrupting the leaderboard the caller still holds. Fix it so the caller's array comes out of the call unchanged and the returned ranking is still highest-first. Keep the exported name.",
+  "verify": "node --test scores.test.mjs",
+  "expected": "resolved",
+  "timeoutMs": 300000
+}

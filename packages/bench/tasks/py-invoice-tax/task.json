@@ -1,0 +1,9 @@
+{
+  "id": "py-invoice-tax",
+  "kind": "coding",
+  "language": "python",
+  "prompt": "invoice.py/invoice_total(lines, rate) must be the exact subtotal (the sum of price * qty) plus the tax on that whole subtotal, and tax.py/tax_for must round to 2 decimals with exact halves going up, as its docstring says. Finance's numbers disagree with ours on multi-line carts and on amounts that land on a half cent. Fix it. Keep the function names and the two-module layout: tax.py owns tax_for, invoice.py owns invoice_total.",
+  "verify": "python -m pytest -q",
+  "expected": "resolved",
+  "timeoutMs": 300000
+}

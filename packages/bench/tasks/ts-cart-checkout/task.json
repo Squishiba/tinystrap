@@ -1,0 +1,9 @@
+{
+  "id": "ts-cart-checkout",
+  "kind": "coding",
+  "language": "typescript",
+  "prompt": "cart.js/checkout(items, discountPct) computes the wrong order total. The rules are: subtotal = sum of price * qty over the items; discount = subtotal * discountPct / 100 (the discount is on the goods only, never on shipping); shipping = 0 when subtotal - discount >= 50, otherwise 8; total = subtotal - discount + shipping; an empty cart is all zeros. checkout returns { subtotal, discount, shipping, total }. Fix it. Keep the exported names and the two-module layout (totals.js owns subtotal, cart.js owns checkout).",
+  "verify": "node --test cart.test.mjs",
+  "expected": "resolved",
+  "timeoutMs": 300000
+}
