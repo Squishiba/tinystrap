@@ -1,5 +1,6 @@
 import type { Discovery } from "@tinystrap/discovery";
 import { loadConfig, type ResolvedConfig } from "./config.js";
+import { detectVerifyCommands } from "./verify-commands.js";
 
 export type DoctorExtra = {
   // The CLI injects this (it wraps proxy's selectProfile). `core` must NOT import
@@ -55,6 +56,16 @@ export async function runDoctor(
     const name = extra.resolveProfile(model);
     // Spec section 12.1: doctor shows the selected profile and why.
     if (name) lines.push(`profile = ${name}   (profile)`);
+  }
+  // Spec section 8.1: the operator sees which checks the verifier would run in a
+  // fresh copy of the baseline, and where to override them, before running a task.
+  const verifyCommands = detectVerifyCommands(projectRoot);
+  lines.push("");
+  if (verifyCommands.length === 0) {
+    lines.push("verify commands: none detected (configure [verify] in tinystrap.toml)");
+  } else {
+    lines.push("verify commands:");
+    for (const c of verifyCommands) lines.push(`  ${c.name} = ${c.command}`);
   }
   return lines.join("\n");
 }

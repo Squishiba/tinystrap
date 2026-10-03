@@ -25,4 +25,21 @@ describe("doctor", () => {
     });
     expect(out).toContain("discovery failed: connection refused");
   });
+
+  it("lists the detected verify commands (spec 8.1)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ts-doc-verify-"));
+    writeFileSync(join(dir, "package.json"),
+      JSON.stringify({ scripts: { test: "vitest run", typecheck: "tsc -b" } }));
+    const out = await runDoctor(dir, new StubDiscovery({ servers: [] }));
+    expect(out).toContain("verify commands:");
+    expect(out).toContain("  test = pnpm run test");
+    expect(out).toContain("  typecheck = pnpm run typecheck");
+  });
+
+  it("says when nothing was detected, and points at the config table", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ts-doc-noverify-"));
+    const out = await runDoctor(dir, new StubDiscovery({ servers: [] }));
+    expect(out).toContain("verify commands: none detected "
+      + "(configure [verify] in tinystrap.toml)");
+  });
 });
