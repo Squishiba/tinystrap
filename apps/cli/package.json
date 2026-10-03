@@ -7,6 +7,8 @@
   "bin": { "tinystrap": "./src/main.ts" },
   "dependencies": {
     "@tinystrap/core": "workspace:*",
-    "@tinystrap/discovery": "workspace:*"
+    "@tinystrap/discovery": "workspace:*",
+    "@tinystrap/policy": "workspace:*",
+    "@tinystrap/proxy": "workspace:*"
   }
 }
